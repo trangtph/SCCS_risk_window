@@ -168,9 +168,9 @@ Campos_2017 <- function(formula, #The dependent variable should always be "event
 ##- adjusted = define knot in DAYS
 
 Campos_plot <- function(data, 
-                        risk_win,# variable 'risk length' in the data
-                        T_L_inv, # variable '1/risk length' in the data
-                        IRR_L,   # variable 'estimated IRR' in the data
+                        risk_win = "candidate_risk_win",# variable 'risk length' in the data
+                        T_L_inv = "inverse_t", # variable '1/risk length' in the data
+                        IRR_L = "IRR_L",   # variable 'estimated IRR' in the data
                         xbreak = 20 # number of breaks for the x axis plot
                         ){ 
   
@@ -244,13 +244,14 @@ Campos_plot <- function(data,
     theme_minimal()
   
   return(list(model = final_model, best_knot_inv = best_knot_inv, 
-              best_day_length = best_day_length, plot = p))
+              best_day_length = best_day_length, plot = p,
+              IRR_optimal = optimal_point))
 }
 
 
 # 4. Execute the Analysis --------------------------------------
 
-# Example 1: Use 'itpdat' 
+## 4.1. Use 'itpdat' --------
 # Load the example data from the SCCS package
 data(itpdat)
 
@@ -286,17 +287,51 @@ itp_test_campos <- foreach(k = seq_along(risk_win),
 View(itp_test_campos)
 
 # Use the plotting function to find the optimal knot from integer day candidates
-results <- Campos_plot(
-  data = itp_test_campos,
-  risk_win = "candidate_risk_win",
-  T_L_inv = "inverse_t",
-  IRR_L = "IRR_L"
+itp_result_campos <- Campos_plot(
+  data = itp_test_campos
 )
 
 # View the generated plot
-print(results$plot)
+print(itp_result_campos$plot)
 # Print the IRR that corresponds to the optimal risk length
-print(itp_test_campos[itp_test_campos$candidate_risk_win==results$best_day_length,])
-
+itp_result_campos$IRR_optimal
 
 ## Results are consistent with Campos (2017 paper), tau = 84 days
+
+## 4.2. Test for dataset 'condat' --------------------------------------------------
+
+
+risk_win <- seq(7, 168, by = 7)
+ageg <- seq(387,707,20)
+
+con_test_campos <- foreach(k = seq_along(risk_win),
+                    .combine = rbind) %do% 
+  {
+    
+    i <- risk_win[k]
+    
+    data_analyse <- Campos_2017(event~hib+mmr+age,
+                            indiv = case, 
+                            astart = sta,
+                            aend = end,
+                            aevent = conv,
+                            adrug = cbind(hib, mmr),
+                            aedrug = cbind(hib + 14, mmr + i),
+                            expogrp = list(c(1), c(1)),
+                            agegrp = ageg,
+                            data = condat,
+                            expo_of_interest = "mmr",
+                            risk_win_of_interest = 1
+    )
+    # Add required columns for plotting: risk length (t) and inverse (1/t)
+    data_analyse$candidate_risk_win = i
+    data_analyse$inverse_t <- 1/i
+    data_analyse
+  }
+View(con_test_campos)
+
+con_result_campos <- Campos_plot(
+  data = con_test_campos
+)
+con_result_campos$plot #Optimal at 21 days
+con_result_campos$IRR_optimal 
