@@ -14,6 +14,7 @@ pacman::p_load(
   survival,
   foreach,
   ggplot2,
+  scales,
   splines2,
   rlang 
 )
@@ -166,53 +167,80 @@ Campos_2017 <- function(formula, #The dependent variable should always be "event
 
 ##- adjusted = define knot in DAYS
 
-Campos_plot <- function(data, x_var_inv, y_var, start_day, end_day) {
+Campos_plot <- function(data, 
+                        risk_win,# variable 'risk length' in the data
+                        T_L_inv, # variable '1/risk length' in the data
+                        IRR_L,   # variable 'estimated IRR' in the data
+                        xbreak = 20 # number of breaks for the x axis plot
+                        ){ 
   
-  # 1. Define range of possible knots in DAYS (t = 21, ..., 147)
-  # We use +1 and -1 to ensure candidates are inside the data range [1/147, 1/21]
-  day_candidates <- seq(from = start_day + 1, to = end_day - 1, by = 1)
+  # 1. Define range of candidate knots
+  #day_candidates <- seq(from = start_day, to = end_day, by = 1)
   # Convert to the inverse scale (1/t) for the x-axis variable
-  knot_candidates_inv <- 1 / day_candidates
+  candidate_risk_win <- data[[risk_win]]
+  knot_candidates_inv <- data[[T_L_inv]] #only use knots as the candidate risk windows in the SCCS
   
-  # Get data boundaries for fixed splines
-  x_data <- data[[x_var_inv]]
-  b_knots <- range(x_data, na.rm = TRUE)
-  
-  # 2. Define internal SSE calculation function (operates on INVERSE values)
-  calc_sse <- function(k_inv, df_internal, x_inv, y, boundaries) {
-    # Ensure knots are strictly inside boundaries to avoid the error
-    fit <- lm(get(y) ~ splines2::bSpline(get(x_inv), knots = k_inv, 
-                                         Boundary.knots = boundaries, degree = 2), 
-              data = df_internal)
-    sum(resid(fit)^2)
+  # Get data for fitting splines
+  x <- data[[T_L_inv]]
+  y <- data[[IRR_L]]
+
+  # 2. Fit linear-quadratic splines across candidate knots and extract sum of square error
+  ## Define function  
+  calc_sse <- function(knot_inv){ #knot_inv = 1/risk length
+    
+    # Term for the change in slope after the knot:
+    lp  <- pmax(0, x - knot_inv) # = 0 before the knot
+    # Term for the curvature after the knot
+    lp2 <- lp^2
+    # Fit linear-quadratic spline
+    lqs <- lm(y ~ x + lp + lp2) 
+    # Calculate SSE
+    sum(resid(lqs)^2)
   }
+  ## Apply function
+  sse_values <- sapply(knot_candidates_inv, calc_sse)
   
   # 3. Find the knot (in inverse scale) that minimizes SSE
-  sse_values <- sapply(knot_candidates_inv, calc_sse, df_internal = data, 
-                       x_inv = x_var_inv, y = y_var, boundaries = b_knots)
   best_knot_inv <- knot_candidates_inv[which.min(sse_values)]
   
   # 4. Find the corresponding optimal day length (t = 1 / (1/t))
-  best_day_length <- 1 / best_knot_inv
+  candidate_risk_win <- data[[risk_win]]
+  best_day_length <- candidate_risk_win[which.min(sse_values)]
   
-  # 5. Fit final model using the best inverse knot location
-  final_fmla <- as.formula(paste0(y_var, " ~ splines2::bSpline(", x_var_inv, ", knots = ", best_knot_inv, ", degree = 2)"))
-  final_model <- lm(final_fmla, data = data)
+  # 5. Fit final spline using the best knot
+  lp  <- pmax(0, x - best_knot_inv)
+  lp2 <- lp^2
   
-  # 6. Generate prediction grid for smooth plotting
-  t_grid <- data.frame(seq(b_knots[1], b_knots[2], length.out = 200))
-  colnames(t_grid) <- x_var_inv
-  t_grid$pred_y <- predict(final_model, newdata = t_grid)
+  final_model <- lm(y ~ x + lp + lp2)
   
-  # 7. Create the plot using .data pronoun for updated ggplot compatibility
-  p <- ggplot(data, aes(x = .data[[x_var_inv]], y = .data[[y_var]])) +
-    geom_point(alpha = 0.6, color = "darkgray") +
-    geom_line(data = t_grid, aes(x = .data[[x_var_inv]], y = .data[["pred_y"]]), 
-              color = "blue", linewidth = 1) +
-    geom_vline(xintercept = best_knot_inv, linetype = "dashed", color = "red") +
+  # 6. Generate prediction grid for plotting
+  x_grid <- seq(min(x), max(x), length.out = 200)
+  
+  grid_df <- data.frame(
+    x   = x_grid,
+    lp  = pmax(0, x_grid - best_knot_inv),
+    lp2 = pmax(0, x_grid - best_knot_inv)^2
+  )
+  
+  grid_df$pred_y <- predict(final_model, newdata = grid_df)
+  
+  # 7. Visualise the results
+  optimal_point <- data[data[[T_L_inv]] == best_knot_inv, ]
+  
+  p <- ggplot(data, aes(x = .data[[T_L_inv]], y = .data[[IRR_L]])) +
+    geom_point(alpha = 0.8, color = "black") +
+    geom_line(data = grid_df, aes(x = x, y = pred_y), linewidth = 1) +
+    geom_point(data = optimal_point, 
+               aes(x = .data[[T_L_inv]], .data[[IRR_L]]),
+               color = "darkred", 
+               size = 3) + 
     labs(title = "Optimal Quadratic Spline Fit (Campos 2017)",
-         subtitle = paste("Optimal knot at", round(best_day_length, 1), "days"),
-         x = "Inverse Risk Length (1/t)", y = "Relative Risk") +
+         subtitle = paste("Optimal knot at", best_day_length, "days"), 
+         y = "IRR (L)") +
+    scale_x_continuous(
+      name = "Inverse Risk Length (1/T(L))",
+      breaks = scales::breaks_pretty(n = xbreak)
+    ) +
     theme_minimal()
   
   return(list(model = final_model, best_knot_inv = best_knot_inv, 
@@ -249,8 +277,8 @@ itp_test_campos <- foreach(k = seq_along(risk_win),
                        risk_win_of_interest = 2)
     
     # Add required columns for plotting: risk length (t) and inverse (1/t)
-    res$risk_length <- i
-    res$inv_t <- 1/i
+    res$candidate_risk_win = i
+    res$inverse_t <- 1/i
     res
   }
 
@@ -259,19 +287,16 @@ View(itp_test_campos)
 
 # Use the plotting function to find the optimal knot from integer day candidates
 results <- Campos_plot(
-  data = itp_test_campos, 
-  x_var_inv = "inv_t", 
-  y_var = "IRR_L",
-  start_day = 21,
-  end_day = 147
+  data = itp_test_campos,
+  risk_win = "candidate_risk_win",
+  T_L_inv = "inverse_t",
+  IRR_L = "IRR_L"
 )
 
-# Print the final optimal day length and view the generated ggplot object
-cat("The optimal risk length calculated from integer day candidates is:", results$best_day_length, "days.\n")
+# View the generated plot
 print(results$plot)
-# print the IRR that corresponds to the optimal risk length
-print(itp_test_campos$IRR_L[itp_test_campos$risk_length==results$best_day_length])
+# Print the IRR that corresponds to the optimal risk length
+print(itp_test_campos[itp_test_campos$candidate_risk_win==results$best_day_length,])
 
 
-## Note: optimal knot at 0.01301546 >> corresponding to tau = 77 days
-## not consistent with results described in paper, tau = 84 days
+## Results are consistent with Campos (2017 paper), tau = 84 days
