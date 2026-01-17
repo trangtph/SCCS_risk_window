@@ -16,30 +16,24 @@
 
 
 
-##--- Data Preparation ---##
-# This function use format of 'itpdat' dataset from SCCS package 
-
-prepare_scan_data <- function(data, case_col, event_col, exposure_col, max_days) {
-  # 1. Calculate relative days using flexible column names
-  # Use [[ ]] to select columns as variables
-  relative_day <- data[[event_col]] - data[[exposure_col]]
+# 1. Function for data preparation ----------
+# Before this step the data should be formated to the SCCS "multi" format
+prepare_scan_data <- function(data, id_col, event_col, exposure_col, max_days) {
+  # Calculate event time, day 0 = day of vaccination
+  data$event_time <- data[[event_col]] - data[[exposure_col]]
+  data <- data[order(data[[id_col]], data$event_time), ]
   
-  # 2. Create a temporary data frame using the flexible case ID
-  df <- data.frame(
-    case = data[[case_col]], 
-    relative_day = relative_day
-  )
+  # Filter events within [1, max_days]
+  df <- data[data$event_time >= 1 & data$event_time <= max_days, ]
   
-  # 3. Filter by the flexible max_days
-  df_filtered <- df[df$relative_day >= 1 & df$relative_day <= max_days, ]
+  # Keep only the first event for each case ID
+  df <- df[!duplicated(df[[id_col]]), ]
   
-  # 4. Deduplicate to keep only the first event for each case ID
-  df_unique <- df_filtered[!duplicated(df_filtered$case), ]
-  
-  # 5. Tabulate counts up to the flexible max_days
-  counts <- tabulate(df_unique$relative_day, nbins = max_days)
+  # Tabulate counts up to the flexible max_days
+  counts <- tabulate(df$event_time, nbins = max_days)
   
   return(list(
+    event_days = df$event_time,
     daily_counts = counts,
     n = sum(counts),
     m = max_days
@@ -50,7 +44,10 @@ prepare_scan_data <- function(data, case_col, event_col, exposure_col, max_days)
 ##--- Likelihood Function ---##
 
 # Calculates likelihood for the Alternative Hypothesis (there IS a cluster)
-calculate_likelihood_alt <- function(Ec, n, c_prime, m) {
+calculate_likelihood_alt <- function(Ec,      # Nr of ppl with events within window 1-c
+                                     n, 
+                                     c_prime, 
+                                     m) {     # max window to scan
   if (n == 0 || m == 0) return(NA) # safety check to prevent errors in mathematical calculations
   p_hat <- Ec / n        # Proportion of events that fell inside the window
   pi_hat <- c_prime / m  # Proportion of time the window represents
@@ -61,6 +58,10 @@ calculate_likelihood_alt <- function(Ec, n, c_prime, m) {
 }
 
 # Calculates likelihood for the Null Hypothesis (events are UNIFORM)
+# Under the null, event are uniform on [1, m].
+# Denote Yi the indicator if the event of individual i happened by day c. 
+# Then under the null Yi ~ Bernoulli(theta = c/m).
+# Ec = sum of n Yi -> Ec ~ Binomial(n, theta)
 calculate_likelihood_null <- function(Ec, n, c_prime, m) {
   if (m == 0) return(NA) # safety check 
   pi_hat <- c_prime / m  # Probability based strictly on duration
@@ -140,6 +141,9 @@ run_full_analysis <- function(prepared_data, n_sim = 999, n_boot = 499) {
   ))
 }
 
+
+
+
 ##--- Execution ---##
 
 ### Example 1: Use 'itpdat' from SCCS package ###
@@ -155,48 +159,40 @@ scan_length <- 147  # Potential window length to be scanned
 # Step 1: Prepare data using all flexible arguments
 itp_prepared <- prepare_scan_data(
   data = itpdat, 
-  case_col = case,
-  event_col = event, 
-  exposure_col = vaccine, 
-  max_days = scan_length
+  id_col = "case",
+  event_col = "itp", 
+  exposure_col = "mmr", 
+  max_days = 147
 )
 
 # Step 2: Run the scan statistic (using the previously defined run_full_analysis function)
 final_results <- run_full_analysis(itp_prepared, n_sim = 999, n_boot = 499)
+# 17 cases in total, Optimal window: Days 1-51, p=0.01, ER = 2.543, 95% CI [1.014, 8.647]
 
-##--- Final Output ---##
-# Print Results
-cat("\n--- Temporal Scan Statistic (itpdat) ---\n")
-cat("Results for Window of: 1 to", scan_length, "Days post exposure")
-cat("Cases included (one per person):", n_total, "\n")
-cat("Detected Optimal Window: Days 1 to", final_results$window)
-cat("Events in Window:", results$optimal_Ec, "\n")
-cat("Monte Carlo P-value:", round(final_results$p_value, 4))
-cat("Excess Risk (RR):", round(final_results$excess_risk, 3))
-cat("95% Bootstrap CI: [", round(final_results$ci_95[1], 3), ",", round(final_results$ci_95[2], 3), "]")
-##
+
 
 
 ### Example 2: GBS Dataset from example described in the paper ###
 ##-- 1. Data Preparation
 
 # Create GBS dataset
-event_data <- c(1,1,2,3,3,4,6,6,7,8,9,9,10,10,11,11,12,12,12,13,14,14,16,16,17,17,17,18,19,20,
+gbs_event_data <- c(1,1,2,3,3,4,6,6,7,8,9,9,10,10,11,11,12,12,12,13,14,14,16,16,17,17,17,18,19,20,
                 20,23,24,25,26,27,28,28,28,29,30,32,33,33,33,33,35,36,37,37,39,40,41,42,44,
                 46,50,50,53,54,63,64,64,67,68,71,71,74,75,76,77,84,85,87,87,87,90,90,90)
 
 # 1. Define study parameters
 m_total <- 90  # Maximum follow-up day
-n_total <- length(event_data)
+n_total <- length(gbs_event_data)
 
 # 2. Aggregate into daily counts (Day 1, Day 2, ..., Day 90)
-daily_counts <- tabulate(event_data, nbins = m_total)
+daily_counts <- tabulate(gbs_event_data, nbins = m_total)
 
 # 3. Create the prepared data list for the analysis functions
-prepared_data <- list(daily_counts = daily_counts, n = n_total, m = m_total)
+prepared_data <- list(event_days = gbs_event_data, daily_counts = daily_counts, n = n_total, m = m_total)
 
 # Run the analysis
 results <- run_full_analysis(prepared_data, n_sim = 9999, n_boot = 9999)
+
 
 # Format and print the final analysis summary
 cat("\n===========================================")
