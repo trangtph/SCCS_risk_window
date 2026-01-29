@@ -23,21 +23,30 @@ editor: visual
 ---
 
 ```{r}
-if (!require("pacman", quietly = TRUE)) {
-  install.packages("pacman")
-}
+#if (!require("pacman", quietly = TRUE)) {
+#  install.packages("pacman")
+#}
 
-library(pacman)
-pacman::p_load(
-  dplyr,
-  rio,
-  here,
-  ggplot2,
-  lubridate,
-  SCCS,
-  survival,
-  flextable
-  )
+#library(pacman)
+#pacman::p_load(
+#  dplyr,
+#  rio,
+#  here,
+#  ggplot2,
+#  lubridate,
+#  SCCS,
+#  survival,
+#  flextable
+#  )
+
+library(dplyr)
+library(rio)
+library(here)
+library(ggplot2)
+library(lubridate)
+library(SCCS)
+library(survival)
+library(flextable)
 ```
 
 ```{r}
@@ -58,7 +67,7 @@ str(cdm_sccs, max.level = 1)
 
 ## Distributions of exposures and outcomes
 
-###  Distribution of outcome events over the observation period:
+### Distribution of outcome events over the observation period:
 
 ```{r}
 # Function to plot monthly counts of events: 
@@ -101,8 +110,7 @@ plot_monthly_counts(cdm_sccs$thrc_sccs,
                     label = "Thrombocytopenia events")
 ```
 
-
-###   Distribution of vacc date
+### Distribution of vacc date
 
 ```{r}
 #| label: fig-vacc_count
@@ -121,8 +129,7 @@ plot_monthly_counts(cdm_sccs$covid_vacc_wide,
                     label = "ChAd dose 2",ylab = "Number of vaccinations")
 ```
 
-
-###  Distribution of 1st COVID-19 infection
+### Distribution of 1st COVID-19 infection
 
 ```{r}
 #| label: fig-inf_count
@@ -132,8 +139,7 @@ plot_monthly_counts(cdm_sccs$individual,
                     label = "First COVID-19 infection")
 ```
 
-
-###   Number of vaccinated cases (events could occur before or after vaccination)
+### Number of vaccinated cases (events could occur before or after vaccination)
 
 ```{r}
 cat("Myocarditis (N cases = ", nrow(cdm_sccs$myo_sccs),")")
@@ -529,6 +535,14 @@ tbl_baseline <- make_table1(
   condition_labels = c("Lung disease", "Chronic kidney disease",
     "Diabetes","Cardiovascular disease","Cancer")
 )
+```
+
+
+```{r eval=TRUE}
+#| label: "tbl-baseline"
+#| tbl-cap: "Baseline characteristics of cases"
+
+# Note: If package `flextable` is not available, change eval = FALSE to this chunk and change eval = TRUE to the chunk below this.
 
 tbl_baseline_format <- flextable(tbl_baseline) |>
   bold(part = "header") |>
@@ -542,3 +556,11 @@ tbl_baseline_format <- add_group_N_to_header(tbl_baseline_format,
 
 tbl_baseline_format
 ```
+
+```{r eval=FALSE}
+#| label: "tbl-baseline2"
+#| tbl-cap: "Baseline characteristics of cases"
+#| 
+tbl_baseline
+```
+
