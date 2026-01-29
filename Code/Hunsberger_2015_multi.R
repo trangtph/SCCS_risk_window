@@ -32,24 +32,43 @@ rio,
 here
 )
 
-# Load data
-# Use simulated data
-data <-read.csv("simulated_SCCS_vaccine.csv",header=TRUE)
-#  Exposure = 'bnt_1'; 'bnt_2'; 'chad_1'; 'chad_2'
-#  scan window = 70 days after each exposure
+# ------------------------------------------------------------------------------
+# Part 1: Define functions to implement the method Hunsberger (2015) -----------
+# ------------------------------------------------------------------------------
 
-# 1. Function for data preparation ----------
-# Define function to loop over 4 exposure columns
+## 1. Function for data preparation --------------------------------------------
+# This function loops over 4 exposure columns
 prepare_scan_data_multi <- function(data, id_col, event_col, exposure_cols, 
                                     start_col, end_col, max_days) {
+  
+  # Define dose pairs for censoring
+  dose_pairs <- list(
+    bnt_1  = "bnt_2",
+    chad_1 = "chad_2")
+  
   
   # Iterate over each exposure column provided
   results <- lapply(exposure_cols, function(exp_col) {
     
-    # Calculate event time: day 0 = day of specific exposure
-    # Use [[exp_col]] to dynamically access the column
     temp_data <- data
+    # Calculate event time: day 0 = day of specific exposure
     temp_data$event_time <- temp_data[[event_col]] - temp_data[[exp_col]]
+    
+    # Default: user-specified max_days for everyone
+    temp_data$max_days_eff <- max_days
+    
+    # Apply dose-2 censoring if this is a first dose
+    if (exp_col %in% names(dose_pairs)) {
+      
+      dose2_col <- dose_pairs[[exp_col]]
+      has_dose2 <- !is.na(temp_data[[dose2_col]]) & 
+        !is.na(temp_data[[exp_col]])
+      # Calculate dosing interval
+      dose_gap <- temp_data[[dose2_col]] - temp_data[[exp_col]] - 1
+      # Censor max_days at dose 2
+      temp_data$max_days_eff[has_dose2] <- 
+        pmin(max_days, dose_gap[has_dose2])
+    }
     
     # Filter conditions
     # 1. Event must be between the start and end of observation period
@@ -61,14 +80,14 @@ prepare_scan_data_multi <- function(data, id_col, event_col, exposure_cols,
       temp_data[[event_col]] >= temp_data[[start_col]] & 
       temp_data[[event_col]] <= temp_data[[end_col]] &
       temp_data$event_time >= 1 & 
-      temp_data$event_time <= max_days
+      temp_data$event_time <= temp_data$max_days_eff
          
     df <- temp_data[valid_rows, ]
     
     # Sort by ID and event time
     df <- df[order(df[[id_col]], df$event_time), ]
     
-    # Keep only the first event for each case ID for this exposure
+    # Keep only the first event for each case ID for this exposure 
     df <- df[!duplicated(df[[id_col]]), ]
     
     # Tabulate counts
@@ -87,7 +106,7 @@ prepare_scan_data_multi <- function(data, id_col, event_col, exposure_cols,
   return(results)
 }
 
-# 2. Function to calculate GLR statistic on log scale ----------
+## 2. Function to calculate GLR statistic on log scale -------------------------
 # Take the log of the GLR stat to avoid working with extremely small numbers
 # log is a monotone transformation so maximizing the log is equivalent to 
 # maximizing the original test stat
@@ -109,7 +128,7 @@ log_glr_stat <- function(Ec, # Number of events up to day c
     (n - Ec) * log((1 - p_hat) / (1 - theta))
 }
 
-# 3. Function to scan the GLRT over all c and choose the maximum ----------
+## 3. Function to scan the GLRT over all c and choose the maximum --------------
 
 find_max_glrt_scan <- function(counts # Daily event counts up to day m
 ) {
@@ -143,7 +162,7 @@ find_max_glrt_scan <- function(counts # Daily event counts up to day m
 }
 
 
-# 4. Function to calculate the Monte Carlo p-value -------
+## 4. Function to calculate the Monte Carlo p-value ----------------------------
 # for testing whether events occur earlier than would be expected 
 # if events follow a uniform distribution
 scan_p_value <- function(counts, n_sim = 4999, seed = 2026) {
@@ -171,12 +190,12 @@ scan_p_value <- function(counts, n_sim = 4999, seed = 2026) {
   )
 }
 
-# 5. Function to calculate Excess Risk ------
+## 5. Function to calculate Excess Risk ----------------------------------------
 calculate_ER <- function(Ec, c, n, m) {
   (Ec / c) / (n / m)
 }
 
-# 6. Non-parametric bootstrap for 95% CI of ER -----
+## 6. Non-parametric bootstrap for 95% CI of ER --------------------------------
 bootstrap_ER <- function(event_time, m, n_boot = 5000, seed = 2026) {
   
   n <- length(event_time)
@@ -202,7 +221,7 @@ bootstrap_ER <- function(event_time, m, n_boot = 5000, seed = 2026) {
   quantile(ERs, c(0.025, 0.975), na.rm = TRUE)
 }
 
-# 7. Function to run scan test
+## 7. Function to run scan test ------------------------------------------------
 run_scan_test <- function(prepared_data,
                           n_sim = 4999,
                           n_boot = 5000, 
@@ -238,7 +257,7 @@ run_scan_test <- function(prepared_data,
   ))
 }
 
-# 8. Implement the full procedure for multiple exposures -----
+## 8. Function to implement the full procedure for multiple exposures ----------
 run_full_analysis <- function(data, id_col, event_col, exposure_cols, start_col, end_col, max_days, 
                               n_sim = 4999, n_boot = 5000, seed = 2026) {
   
@@ -265,16 +284,38 @@ run_full_analysis <- function(data, id_col, event_col, exposure_cols, start_col,
   return(final_results)
 }
 
-# --- Run analysis ---
+# ------------------------------------------------------------------------------
+# Part 2: Implement the method on the data -------------------------------------
+# ------------------------------------------------------------------------------
+
+## Load data -----------------------------------------------------------------
+
+files <- c("individual", "myo_sccs", "pe_sccs", "thrc_sccs", "covid_infection", "comorb_stat", "covid_vacc_wide")
+
+cdm_sccs <- setNames(
+  lapply(files, function(nm) {
+    rio::import(here("Processed_data", paste0(nm, ".rds")), trust = TRUE)
+  }),
+  files
+)
+str(cdm_sccs, max.level = 1)
+
+## Specify parameters ----------------------------------------------------------
 exposures <- c('bnt_1', 'bnt_2', 'chad_1', 'chad_2')
 scan_length <- 70
+
+## Implement the analysis ------------------------------------------------------
 results <- run_full_analysis(data, "id", "myo", exposures, "obs_sta", "obs_end", scan_length)
-# non-significant p value for all exposures
 
 
 
-### check data (optional)
-data_prepared <- prepare_scan_data_multi(data, "id", "myo", exposures, "obs_sta", "obs_end", 70)
+## Check data (optional)
+data_prepared <- prepare_scan_data_multi(data = cdm_eligible$pe_sccs, 
+                                         id_col = "id", 
+                                         event_col =  "diagnosis", 
+                                         exposure_cols = exposures, 
+                                         start_col = "obs_sta", end_col = "obs_end", 
+                                         max_days = 185)
 
 # Convert to a summary table
 summary_df <- do.call(rbind, lapply(names(data_prepared), function(name) {
