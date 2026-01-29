@@ -1,0 +1,544 @@
+---
+title: "Project SCCS Risk Window Scanning"
+subtitle: "Descriptive Analysis"
+author: "Trang Tu - Albert Chuang"
+format: 
+  docx:
+    documentclass: report
+    margin-left: 20 mm
+    margin-right: 20 mm
+    margin-top: 20 mm
+    margin-bottom: 20 mm
+    fig-dpi: 300
+    fig-align: center
+    fig-width: 5
+    fig-height: 3
+execute: 
+  echo: false
+  warning: true
+  message: true
+  output: true
+  freeze: auto
+editor: visual
+---
+
+```{r}
+if (!require("pacman", quietly = TRUE)) {
+  install.packages("pacman")
+}
+
+library(pacman)
+pacman::p_load(
+  dplyr,
+  rio,
+  here,
+  ggplot2,
+  lubridate,
+  SCCS,
+  survival,
+  flextable
+  )
+```
+
+```{r}
+# Load the clean and restructured data
+
+files <- c("individual", "myo_sccs", "pe_sccs", "thrc_sccs", "covid_infection", "comorb_stat", "covid_vacc_wide")
+
+cdm_sccs <- setNames(
+  lapply(files, function(nm) {
+    rio::import(here("Processed_data", paste0(nm, ".rds")), trust = TRUE)
+  }),
+  files
+)
+
+cat("Check the structure of imported files:")
+str(cdm_sccs, max.level = 1)
+```
+
+## Distributions of exposures and outcomes
+
+###  Distribution of outcome events over the observation period:
+
+```{r}
+# Function to plot monthly counts of events: 
+plot_monthly_counts <- function(df, date_var, label, ylab = "Number of events") {
+  df_month <- df %>%
+    filter(!is.na({{ date_var }})) %>%
+    mutate(month = lubridate::floor_date({{ date_var }}, "month")) %>%
+    count(month, name = "n")
+
+  ggplot(df_month, aes(x = month, y = n)) +
+    geom_col(fill = "grey70", color = "grey30") +
+    scale_x_date(
+      date_breaks = "3 months",
+      date_labels = "%Y-%m"
+    ) +
+    labs(
+      title = paste0(label, " (N = ", sum(df_month$n), ")"),
+      x = "Month",
+      y = ylab
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+}
+```
+
+```{r}
+#| label: fig-event_count
+#| fig-cap: "Monthly event counts by outcome"
+
+# Apply the function
+
+plot_monthly_counts(cdm_sccs$myo_sccs,  
+                    date_var = diagnosis_date,  
+                    label = "Myocarditis events")
+plot_monthly_counts(cdm_sccs$pe_sccs, 
+                    date_var =  diagnosis_date, 
+                    label = "PE events")
+plot_monthly_counts(cdm_sccs$thrc_sccs, 
+                    date_var = diagnosis_date, 
+                    label = "Thrombocytopenia events")
+```
+
+
+###   Distribution of vacc date
+
+```{r}
+#| label: fig-vacc_count
+#| fig-cap: "Monthly vaccination counts by vaccine brand and dose"
+plot_monthly_counts(cdm_sccs$covid_vacc_wide,  
+                    date_var = bnt_1_date,  
+                    label = "BNT dose 1", ylab = "Number of vaccinations")
+plot_monthly_counts(cdm_sccs$covid_vacc_wide,  
+                    date_var = bnt_2_date,  
+                    label = "BNT dose 2", ylab = "Number of vaccinations")
+plot_monthly_counts(cdm_sccs$covid_vacc_wide,  
+                    date_var = chad_1_date,  
+                    label = "ChAd dose 1", ylab = "Number of vaccinations")
+plot_monthly_counts(cdm_sccs$covid_vacc_wide,  
+                    date_var = chad_2_date,  
+                    label = "ChAd dose 2",ylab = "Number of vaccinations")
+```
+
+
+###  Distribution of 1st COVID-19 infection
+
+```{r}
+#| label: fig-inf_count
+#| fig-cap: "Monthly incidence of COVID-19 infection"
+plot_monthly_counts(cdm_sccs$individual,  
+                    date_var = infect_date,  
+                    label = "First COVID-19 infection")
+```
+
+
+###   Number of vaccinated cases (events could occur before or after vaccination)
+
+```{r}
+cat("Myocarditis (N cases = ", nrow(cdm_sccs$myo_sccs),")")
+cdm_sccs$myo_sccs %>% summarise(case_bnt1 = sum(!is.na(bnt_1)),
+                                case_bnt2 = sum(!is.na(bnt_2)),
+                                case_chad1 = sum(!is.na(chad_1)),
+                                case_chad2 = sum(!is.na(chad_2)),
+                                )
+
+cat("PE (N cases = ", nrow(cdm_sccs$pe_sccs),")")
+cdm_sccs$pe_sccs %>% summarise(case_bnt1 = sum(!is.na(bnt_1)),
+                                case_bnt2 = sum(!is.na(bnt_2)),
+                                case_chad1 = sum(!is.na(chad_1)),
+                                case_chad2 = sum(!is.na(chad_2)),
+                                )
+
+cat("Thrombocytopenia (N cases = ", nrow(cdm_sccs$thrc_sccs),")")
+cdm_sccs$thrc_sccs %>% summarise(case_bnt1 = sum(!is.na(bnt_1)),
+                                case_bnt2 = sum(!is.na(bnt_2)),
+                                case_chad1 = sum(!is.na(chad_1)),
+                                case_chad2 = sum(!is.na(chad_2)),
+                                )
+```
+
+## Check assumptions of SCCS model
+
+### Event-dependent observation period
+
+-   histogram of time from event until end of observation
+
+```{r}
+#| label: fig-event_to_cens
+#| fig-cap: "Distribution of time from event to end of follow-up"
+
+# Calculate the time from event until end of observation
+cdm_sccs[c("myo_sccs", "pe_sccs", "thrc_sccs")] <- lapply(cdm_sccs[c("myo_sccs", "pe_sccs", "thrc_sccs")], function(df) {
+  df %>%
+    mutate(event_to_ad_end = 577-diagnosis + 1,
+           event_to_censor = obs_end - diagnosis +1) 
+})
+
+# Function to plot the time from event until end of observation
+plot_event_to_cens <- function(df, label){
+  df |>
+  tidyr::pivot_longer(
+    cols = c(event_to_ad_end, event_to_censor),
+    names_to = "type",
+    values_to = "days") |>
+    ggplot(aes(x = days)) +
+  geom_histogram(
+    binwidth = 10,
+    colour = "gray"
+  ) +
+  facet_wrap(~ type, scales = "free_y") +
+  labs(
+    x = "Days from event",
+    y = "Frequency",
+    title = label) +
+  theme_minimal()
+}
+
+# Apply the function
+plot_event_to_cens(cdm_sccs$myo_sccs, label = "Myocarditis")
+plot_event_to_cens(cdm_sccs$pe_sccs, label = "PE")
+plot_event_to_cens(cdm_sccs$thrc_sccs, label = "Thrombocytopenia")
+
+```
+
+### Event-dependent exposure
+
+-   Time interval between the start of each exposure and the event
+
+```{r}
+# Function to calculate the event-exposure interval
+exposure_centered_intervals <- function(
+  data,
+  event_var = "diagnosis",
+  exposure_vars = c("bnt_1", "bnt_2", "chad_1", "chad_2")) {
+
+  out <- vector("list", length(exposure_vars))
+  names(out) <- exposure_vars
+
+  for (exp in exposure_vars) {
+
+    # keep events for exposed individuals
+    d_exp <- data[!is.na(data[[exp]]), ]
+
+    if (nrow(d_exp) == 0) {
+      out[[exp]] <- NULL
+      next
+    }
+
+    # interval between event and exposure time
+    delta <- d_exp[[event_var]] - d_exp[[exp]]
+
+    out[[exp]] <- data.frame(
+      exposure = exp,
+      delta = delta
+    )
+  }
+
+  do.call(rbind, out)
+}
+
+# Apply the function
+myo_to_exp <- exposure_centered_intervals(cdm_sccs$myo_sccs)
+pe_to_exp <- exposure_centered_intervals(cdm_sccs$pe_sccs)
+thrc_to_exp <- exposure_centered_intervals(cdm_sccs$thrc_sccs)
+
+```
+
+```{r}
+#| label: fig-event_to_exp
+#| fig-cap: "Number of events in exposed cases by time since exposure, for investigating event-dependent exposure"
+#| fig-height: 5
+ 
+# Plot the interval for each exposure and each outcome
+plot_event_to_exp <- function(df, label) {
+ggplot(df, aes(delta)) +
+  geom_histogram(binwidth = 5, boundary = 0, colour = "gray") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  facet_wrap(~ exposure, scales = "free_y") +
+  labs(
+    x = "Days since exposure",
+    y = "Number of events",
+    title = label
+  ) +
+  theme_minimal()
+}
+
+plot_event_to_exp(myo_to_exp, "Myocarditis")
+plot_event_to_exp(pe_to_exp, "PE")
+plot_event_to_exp(thrc_to_exp, "Thrombocytopenia")
+```
+
+-   Centred observation plots to help interpret the centred event plot
+
+```{r}
+#| label: fig-centred_obs
+#| fig-cap: "Centred observation plots: number of exposed cases under observation by time since exposure"
+
+# Function to calculate number of exposed cases under observation
+centred_observation_plot <- function(
+  data,
+  exposure_vars = c("bnt_1", "bnt_2", "chad_1", "chad_2"),
+  t_min = -750,
+  t_max = 500,
+  by = 1
+) {
+
+  t_grid <- seq(t_min, t_max, by = by)
+
+  out <- vector("list", length(exposure_vars))
+  names(out) <- exposure_vars
+
+  for (exp in exposure_vars) {
+
+    # keep only exposed individuals for this exposure
+    d_exp <- data[!is.na(data[[exp]]), ]
+    d_exp <- d_exp %>% mutate(n_event=1)
+
+    if (nrow(d_exp) == 0) {
+      out[[exp]] <- NULL
+      next
+    }
+
+    # centre observation periods on exposure
+    obs_start_c <- d_exp$obs_sta - d_exp[[exp]]
+    obs_end_c   <- d_exp$obs_end - d_exp[[exp]]
+
+    E_t <- numeric(length(t_grid))
+
+    for (j in seq_along(t_grid)) {
+      t <- t_grid[j]
+
+      inside <- (t > obs_start_c) & (t <= obs_end_c)
+
+      E_t[j] <- sum(d_exp$n_event[inside])
+    }
+
+    out[[exp]] <- data.frame(
+      exposure = exp,
+      t = t_grid,
+      E_t = E_t)
+  }
+
+  do.call(rbind, out)
+}
+
+# Apply the function
+myo_centred_obs <- centred_observation_plot(cdm_sccs$myo_sccs)
+pe_centred_obs <- centred_observation_plot(cdm_sccs$pe_sccs)
+thrc_centred_obs <- centred_observation_plot(cdm_sccs$thrc_sccs)
+
+# Make plots
+ggplot(myo_centred_obs, aes(t, E_t, colour = exposure)) +
+  geom_line() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(
+    x = "Days since exposure",
+    y = "Maximum possible number of events E(t)",
+    title = "Myocarditis") +
+  theme_minimal()
+
+ggplot(pe_centred_obs, aes(t, E_t, colour = exposure)) +
+  geom_line() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(
+    x = "Days since exposure",
+    y = "Maximum possible number of events E(t)",
+    title = "PE") +
+  theme_minimal()
+
+ggplot(thrc_centred_obs, aes(t, E_t, colour = exposure)) +
+  geom_line() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(
+    x = "Days since exposure",
+    y = "Maximum possible number of events E(t)",
+    title = "Thrombocytopenia") +
+  theme_minimal()
+```
+
+The centred observation plot reflects design constraints: number of exposed cases that are under observation at a given time point (the hypothetical distribution of event relative to exposure if there is no event-dependent exposure).
+
+## Baseline characteristics of cases (per outcome)
+
+-   Baseline characteristics of myocarditis cases:
+
+```{r}
+#Merge baseline characteristic info into one table
+cdm_sccs[c("myo_baseline", "pe_baseline", "thrc_baseline")] <-
+  lapply(cdm_sccs[c("myo_sccs", "pe_sccs", "thrc_sccs")], function(df) {
+  df %>%
+      dplyr::select(id, event_name) %>%
+      dplyr::left_join(cdm_sccs$individual %>% dplyr::select(id, age, sex), by = "id") %>%
+      dplyr::left_join(cdm_sccs$comorb_stat, by = "id")  
+    })
+
+cdm_sccs$basline_all <- rbind(cdm_sccs$myo_baseline, cdm_sccs$pe_baseline, cdm_sccs$thrc_baseline)
+```
+
+```{r}
+# Helper function to calculate summary statistics
+cal_median_iqr <- function(x) {
+  x <- x[!is.na(x)]
+  if (length(x) == 0) return("NA")
+  sprintf(
+    "%1.0f (%1.0f–%1.0f)",
+    median(x),
+    quantile(x, 0.25),
+    quantile(x, 0.75)
+  )
+}
+
+cal_n_pct <- function(x) {
+  n_yes <- sum(x == 1, na.rm = TRUE)
+  n_tot <- sum(!is.na(x))
+  if (n_tot == 0) return("NA")
+  sprintf("%d (%.1f%%)", n_yes, 100 * n_yes / n_tot)
+}
+
+cal_missing <- function(x) {
+  n <- length(x)
+  n_miss <- sum(is.na(x))
+  sprintf("%d (%.1f%%)", n_miss, 100 * n_miss / n)
+}
+
+# Function to make baseline characteristic table
+
+make_table1 <- function(
+  data,
+  group_var = NULL,
+  age_var = "age",
+  sex_var = "sex",
+  male_value = "Male",
+  condition_vars = c("lung_disease", "ckd", "diabetes", "cvd", "cancer"),
+  condition_labels = NULL
+) {
+
+  if (is.null(condition_labels)) {
+    condition_labels <- condition_vars
+  }
+
+  long <- data |>
+    select(all_of(c(group_var, age_var, sex_var, condition_vars))) |>
+    mutate(.group = if (is.null(group_var)) "Overall" else .data[[group_var]])
+
+  # ---- Age ----
+  age_tbl <- long |>
+    dplyr::group_by(.group) |>
+    dplyr::summarise(
+      stat = cal_median_iqr(.data[[age_var]]),
+      missing = cal_missing(.data[[age_var]]),
+      .groups = "drop"
+    ) |>
+    tidyr::pivot_longer(-.group, names_to = "row_type", values_to = "value") |>
+    dplyr::mutate(
+      Characteristic = if_else(
+        row_type == "stat",
+        "Age, median (IQR)",
+        "Age, missing n (%)"
+      )
+    )
+
+  # ---- Sex (Male) ----
+  sex_tbl <- long |>
+    dplyr::group_by(.group) |>
+    dplyr::summarise(
+      stat = cal_n_pct(.data[[sex_var]] == male_value),
+      missing = cal_missing(.data[[sex_var]]),
+      .groups = "drop"
+    ) |>
+    tidyr::pivot_longer(-.group, names_to = "row_type", values_to = "value") |>
+    dplyr::mutate(
+      Characteristic = if_else(
+        row_type == "stat",
+        "Male, n (%)",
+        "Sex, missing n (%)"
+      )
+    )
+
+  # ---- Comorbidities ----
+  cond_tbl <- lapply(seq_along(condition_vars), function(i) {
+    v <- condition_vars[i]
+    lab <- condition_labels[i]
+
+    long |>
+      dplyr::group_by(.group) |>
+      dplyr::summarise(
+        stat = cal_n_pct(.data[[v]]),
+        missing = cal_missing(.data[[v]]),
+        .groups = "drop"
+      ) |>
+      tidyr::pivot_longer(-.group, names_to = "row_type", values_to = "value") |>
+      dplyr::mutate(
+        Characteristic = if_else(
+          row_type == "stat",
+          paste0(lab, ", n (%)"),
+          paste0(lab, ", missing n (%)")
+        )
+      )
+  }) |>
+    bind_rows()
+
+  bind_rows(age_tbl, sex_tbl, cond_tbl) |>
+    dplyr::select(Characteristic, .group, value) |>
+    tidyr::pivot_wider(
+      names_from = .group,
+      values_from = value
+    )
+}
+
+# Function to compute N per group (for headers) 
+get_group_sizes <- function(data, group_var = NULL) {
+
+  if (is.null(group_var)) {
+    tibble(
+      group = "Overall",
+      N = nrow(data)
+    )
+  } else {
+    data |>
+      dplyr::filter(!is.na(.data[[group_var]])) |>
+      dplyr::count(.data[[group_var]], name = "N") |>
+      dplyr::rename(group = .data[[group_var]])}
+}
+
+# Function to add N to column headers
+
+add_group_N_to_header <- function(ft, group_sizes) {
+
+  header_map <- setNames(
+    paste0(group_sizes$group, " (N = ", group_sizes$N, ")"),
+    group_sizes$group
+  )
+
+  flextable::set_header_labels(ft, values = header_map)
+}
+
+
+
+```
+
+```{r}
+#| tbl-cap: "Baseline characteristics of cases"
+
+# Make the table
+tbl_baseline <- make_table1(
+  cdm_sccs$basline_all,
+  group_var = "event_name",
+  condition_vars = c("lung_disease", "ckd", "diabetes", "cvd", "cancer"),
+  condition_labels = c("Lung disease", "Chronic kidney disease",
+    "Diabetes","Cardiovascular disease","Cancer")
+)
+
+tbl_baseline_format <- flextable(tbl_baseline) |>
+  bold(part = "header") |>
+  fontsize(size = 11) |>
+  align(align = "center", part = "header") |>
+  autofit() 
+
+tbl_baseline_format <- add_group_N_to_header(tbl_baseline_format, 
+                                             group_sizes = get_group_sizes(cdm_sccs$basline_all, 
+                                                                           group_var = "event_name"))
+
+tbl_baseline_format
+```

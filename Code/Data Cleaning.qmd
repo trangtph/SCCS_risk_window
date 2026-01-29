@@ -1,0 +1,782 @@
+---
+title: "Project SCCS Risk Window Scanning"
+subtitle: "Data Cleaning"
+author: "Trang Tu - Albert Chuang"
+format: 
+  docx:
+    documentclass: report
+    margin-left: 20 mm
+    margin-right: 20 mm
+    margin-top: 20 mm
+    margin-bottom: 20 mm
+    fig-align: center
+    fig-width: 2.5
+    fig-height: 3
+execute: 
+  echo: false
+  warning: true
+  message: true
+  output: true
+  freeze: auto
+editor: visual
+---
+
+```{r}
+if (!require("pacman", quietly = TRUE)) {
+  install.packages("pacman")
+}
+
+library(pacman)
+pacman::p_load(
+  dplyr,
+  rio,
+  here,
+  stringr,
+  purrr,
+  lubridate,
+  tidyr
+  )
+```
+
+
+## Load the tables of the CDM
+
+
+<!-- Note: Please change the file names (and file location if needed) corresponding to the actual files in the computer -->
+
+```{r}
+comorbidity <- import(here("Raw_data","comorbidity.csv"))
+individual <- import(here("Raw_data","individual.sas7bdat"))
+outcome_event <- import(here("Raw_data", "outcome_event2.csv"))
+covid_infection <- import(here("Raw_data","covid_infection2.csv"))
+covid_vacc <- import(here("Raw_data","covid_vacc2.csv"))
+
+new_thrc <- data.frame(ID = sample(individual$ID, size = 50, replace = FALSE),
+                  HOSP_ID = rep(NA_character_, 50),
+                  primary_diagnosis = as.integer(rep(1, 50)),
+                  diagnosis_date = as.Date(sample(seq(as.Date("2020-01-01"),
+                                                      as.Date("2022-05-31"), 
+                                                      by = "day"), 
+                                                  size = 50, replace = TRUE)),
+                  diagnosis_code = sample(c("M311", "D693", "D694"), size = 50, replace = TRUE),
+                  coding_system = rep("ICD10CM", 50),
+                  hosp_id_new = rep(NA_character_, 50),
+                  id_new = rep(NA_character_, 50)
+    )
+
+outcome_event2 <- rbind(outcome_event, new_thrc)
+export(outcome_event2, here("outcome_event2.csv"))
+outcome_event <- outcome_event2
+```
+
+
+## 0. Data cleaning
+
+-   Skim the initial structure of the data:
+
+```{r}
+cdm <- list(individual = individual, 
+            covid_infection = covid_infection, 
+            covid_vacc = covid_vacc,
+            outcome_event = outcome_event, 
+            comorbidity = comorbidity)
+
+#lapply(cdm, skimr::skim)
+
+lapply(cdm, summary)
+
+
+# Count empty cells and unique cells
+base_summary <- function(df) {
+  data.frame(
+    variable  = names(df),
+    class     = sapply(df, function(x) class(x)[1]),
+    n_empty   = sapply(df, function(x) {
+  if (is.character(x)) sum(trimws(x) == "", na.rm = TRUE) else 0
+}),
+    n_unique  = sapply(df, function(x) length(unique(x[!is.na(x)]))),
+    stringsAsFactors = FALSE
+  )
+}
+
+cat("Data type, number of empty cells and number of unique values per variable:")
+
+lapply(cdm, base_summary)
+```
+
+### Format variables
+
+```{r}
+# Function to clean character missingness
+clean_missing <- function(df) {
+  char_cols <- sapply(df, is.character)
+  
+  df[char_cols] <- lapply(df[char_cols], function(x) {
+    x <- trimws(x) # Remove leading and/or trailing whitespace from character strings
+    x[x %in% c("", ".", "NA")] <- NA
+    x
+  })
+  df
+}
+
+# Apply the function
+cdm_cleaned <- lapply(cdm, function(df){
+  df |> clean_missing()
+})
+```
+
+```{r}
+# Lowercasing column names across all tables
+
+cdm_cleaned <- lapply(cdm_cleaned, function(df) {
+  names(df) <- tolower(names(df))
+  df
+})
+
+
+# Convert columns to correct data types
+num_cols <- c("birth_date", "birth_month", "birth_year")
+cdm_cleaned$individual <- cdm_cleaned$individual %>% 
+  mutate_at(num_cols, as.integer)
+
+cdm_cleaned$individual$sex <- factor(cdm_cleaned$individual$sex, levels = c(1,2,3), labels = c("Male", "Female", "Unknown"))
+cdm_cleaned$comorbidity$origin_of_event <- as.factor(cdm_cleaned$comorbidity$origin_of_event)
+
+# Double check coding of COVID vacc
+cdm_cleaned$covid_vacc <- cdm_cleaned$covid_vacc %>%
+  mutate(
+    vacc_brand_1 = if_else(
+      !is.na(vacc_brand_1) & !vacc_brand_1 %in% c(1, 2, 3),
+      3,
+      vacc_brand_1),
+    vacc_brand_2 = if_else(
+      !is.na(vacc_brand_2) & !vacc_brand_2 %in% c(1, 2, 3),
+      3,
+      vacc_brand_2), 
+    vacc_brand_3 = if_else(
+      !is.na(vacc_brand_3) & !vacc_brand_3 %in% c(1, 2, 3),
+      3,
+      vacc_brand_3))
+```
+
+```{r}
+# Function to Convert date columns to date format
+convert_date <- function(df, 
+                         date_pattern = "_date(_\\d+)?$", #"_date" optionally followed by "_" and one or more digits
+                        orders = c("dmy", "ymd")
+                        ) {
+  
+  date_cols <- grep(date_pattern, names(df), value = TRUE) #collect columns whose names containing "_date"
+  
+  for (col in date_cols) {
+    x <- df[[col]]
+    
+    if (!is.character(x)) next
+    
+    parsed <- lubridate::parse_date_time(
+      x,
+      orders = orders,
+      exact = FALSE
+    )
+
+    # convert to Date (drop time)
+    parsed <- as.Date(parsed)
+    
+    # Warn if conversion failed for non-missing values
+    failed <- !is.na(x) & is.na(parsed)
+    if (any(failed)) {
+      warning(
+        sprintf(
+          "Date parsing failed in column '%s' for %d rows",
+          col, sum(failed)
+        ),
+        call. = FALSE
+      )
+    }
+    df[[col]] <- parsed
+  }
+  df
+}
+
+# Apply the function
+cdm_cleaned <- lapply(cdm_cleaned, function(df){
+  df |>
+    convert_date()
+})
+```
+
+### Add calculated variables
+
+```{r }
+cdm_cleaned$individual$age <- 2020 - cdm_cleaned$individual$birth_year
+```
+
+### Skim the cleaned datasets
+
+```{r}
+lapply(cdm_cleaned, summary)
+cat("Number of empty cells and unique values per variable:")
+lapply(cdm_cleaned, base_summary)
+```
+
+### Add names of the outcome and covariate
+
+-   Build the reference tables
+
+```{r}
+# Note: Change the file location to the actual file location if needed.
+codelist_ref <- import(here("Raw_data","SCCS_riskwindow_codelist.xlsx"))
+
+# Helper function to create list of ICD codes for each variable
+
+icd_token_to_regex <- function(token) {
+
+  token <- stringr::str_trim(token)
+
+  # --- Handle ranges (e.g. C00.x-C41.x)
+  if (stringr::str_detect(token, "-")) {
+
+    parts <- stringr::str_split(token, "-", simplify = TRUE)
+    start <- parts[1]
+    end   <- parts[2]
+
+    letter <- stringr::str_sub(start, 1, 1)
+
+    start_num <- as.integer(stringr::str_extract(start, "\\d+"))
+    end_num   <- as.integer(stringr::str_extract(end, "\\d+"))
+
+    nums <- sprintf("%02d", start_num:end_num)
+
+    return(
+      paste0("^", letter, "(", paste(nums, collapse = "|"), ")")
+    )
+  }
+
+  # Handle dot: make it optional (e.g. match all I21, I21.0, I210)
+  token <- str_replace_all(token, "\\.", "\\\\.?")
+
+  # --- Handle wildcard x / xxx
+  token <- stringr::str_replace(token, "x+", "")
+
+  paste0("^", token)
+}
+
+
+icd_map <- codelist_ref %>%
+  dplyr::mutate(
+    icd10cm = stringr::str_split(icd10cm, ",")
+  ) %>%
+  tidyr::unnest(icd10cm) %>%
+  dplyr::mutate(
+    pattern = purrr::map_chr(icd10cm, icd_token_to_regex)
+  ) %>%
+  dplyr::group_by(event_id, event_name, event_group) %>%
+  dplyr::summarise(
+    pattern = paste(pattern, collapse = "|"),
+    .groups = "drop"
+  )
+```
+
+-   Adding names of the outcome/ comorbidities based on the reference table
+
+```{r}
+# Outcome table
+
+cdm_cleaned$outcome_event <- cdm_cleaned$outcome_event %>%
+  dplyr::mutate(diagnosis_code = as.character(diagnosis_code)) %>%
+  dplyr::mutate(
+    matches = purrr::map(diagnosis_code, \(x) {
+      hit <- icd_map %>% dplyr::filter(str_detect(x, pattern))
+      if (nrow(hit) == 0)
+        tibble(event_id = NA_character_,
+               event_name = NA_character_,
+               event_group = NA_character_)
+      else hit
+    })
+  ) %>%
+  tidyr::unnest(matches) %>% dplyr::select(-c("pattern"))
+
+
+# Comorbidity table
+
+cdm_cleaned$comorbidity <- cdm_cleaned$comorbidity %>%
+  dplyr::mutate(diagnosis_code = as.character(diagnosis_code)) %>%
+  dplyr::mutate(
+    matches = purrr::map(diagnosis_code, \(x) {
+      hit <- icd_map %>% dplyr::filter(str_detect(x, pattern))
+      if (nrow(hit) == 0)
+        tibble(event_id = NA_character_,
+               event_name = NA_character_,
+               event_group = NA_character_)
+      else hit
+    })
+  ) %>%
+  tidyr::unnest(matches) %>% dplyr::select(-c("pattern"))
+
+```
+
+```{r output = FALSE}
+# Check if the event_id and event_group are added correctly to the two tables
+View(cdm_cleaned$outcome_event)
+View(cdm_cleaned$comorbidity)
+```
+
+-   Some sanity check: Any ICDs not classified in outcome and comorb tables?
+
+```{r}
+
+cdm_cleaned$outcome_event %>%
+  filter(is.na(event_id)) %>%
+  count(diagnosis_code) %>%
+  arrange(desc(n))
+
+cdm_cleaned$comorbidity %>%
+  filter(is.na(event_id)) %>%
+  count(diagnosis_code) %>%
+  arrange(desc(n))
+```
+
+{{< pagebreak >}}
+
+## 1. Apply eligibility criteria
+
+### Inclusion criteria
+
+-   Age \>= 12 years
+
+```{r}
+id_12 <- cdm_cleaned$individual %>% 
+  dplyr::filter(age >= 12) %>% 
+  dplyr::distinct(id)
+cat("Age >= 12yo: ", nrow(id_12), " individuals")
+
+```
+
+-   Obs period 1st Oct 2020 - 30 Apr 2022
+
+```{r}
+# Individuals with outcomes in the observation period
+id_outcome_obs_period <- cdm_cleaned$outcome_event %>%
+  dplyr::filter(!is.na(diagnosis_date) & 
+                  diagnosis_date >= as.Date("01-10-2020", format = "%d-%m-%Y") &
+                  diagnosis_date <= as.Date("30-04-2022", format = "%d-%m-%Y")) %>% 
+  dplyr::distinct(id) 
+```
+
+-   Apply the inclusion criteria:
+
+```{r}
+id_eligible <- id_12 %>%
+  semi_join(id_outcome_obs_period, by = "id")
+
+cdm_eligible <- lapply(cdm_cleaned, \(df) {
+  if (!"id" %in% names(df)) df else
+    semi_join(df, id_eligible, by = "id")
+})
+
+cat("Total number of all outcome events in the observation period: ", nrow(cdm_eligible$outcome_event), ", from ", nrow(id_eligible), " individuals")
+
+cat("Number of each outcome before applying exclusion criteria:")
+cdm_eligible$outcome_event %>% 
+  group_by(event_name) %>% summarise(n_event = n())
+```
+
+### Exclusion criteria
+
+#### Missing COVID-19 vacc date, vaccine dose and vaccine brand
+
+```{r}
+# For vaccination information, if both date and brand are missing, then the dose was not administered.
+# We only want to flag individuals who administered a dose but either date or brand is missing
+# We also want to flag individuals with dose order violation (e.g. dose 2 received without dose 1)
+vacc_problem <- cdm_eligible$covid_vacc %>%
+  mutate(
+    dose1 = !is.na(vacc_date_1) & !is.na(vacc_brand_1),
+    dose2 = !is.na(vacc_date_2) & !is.na(vacc_brand_2),
+    dose3 = !is.na(vacc_date_3) & !is.na(vacc_brand_3),
+
+    incomplete_dose1 = xor(is.na(vacc_date_1), is.na(vacc_brand_1)),
+    incomplete_dose2 = xor(is.na(vacc_date_2), is.na(vacc_brand_2)),
+    incomplete_dose3 = (is.na(vacc_date_3) & !is.na(vacc_brand_3)), #for dose 3 we only need date info
+
+    dose2_without_dose1 = dose2 & !dose1,
+    dose3_without_dose1_or_2 = dose3 & (!dose1 | !dose2)
+  )
+
+id_miss_vacc <- vacc_problem %>%
+  filter(
+    incomplete_dose1 |
+    incomplete_dose2 |
+    incomplete_dose3 |
+    dose2_without_dose1 |
+    dose3_without_dose1_or_2
+  ) %>%
+  distinct(id)
+
+cat("Missing vaccination info: ", nrow(id_miss_vacc), " individuals")
+
+cat("Summary of different types of missing vacc info: ")
+vacc_problem %>%
+  summarise(
+    incomplete_dose1 = sum(incomplete_dose1),
+    incomplete_dose2 = sum(incomplete_dose2),
+    incomplete_dose3 = sum(incomplete_dose3),
+    dose2_without_dose1 = sum(dose2_without_dose1),
+    dose3_without_dose1_or_2 = sum(dose3_without_dose1_or_2)
+  )
+
+```
+
+#### Heterologious dose (For BNT & ChAd only)
+
+```{r}
+cdm_eligible$covid_vacc <- cdm_eligible$covid_vacc %>%
+  mutate(same_brand_primary = vacc_brand_1 - vacc_brand_2)
+
+id_hetero_vacc <- cdm_eligible$covid_vacc %>%
+  filter(vacc_brand_1 %in% c(1, 2) & !is.na(same_brand_primary) & same_brand_primary != 0) %>%
+  distinct(id)
+
+cat("Heterologious dose 1 and 2: ", nrow(id_hetero_vacc), " individuals")
+
+```
+
+#### Missing COVID-19 infection date
+
+```{r}
+id_miss_covid <- cdm_eligible$covid_infection %>%
+  filter(is.na(infect_date)) %>% distinct(id)
+```
+
+#### Individuals with \<3 years of data availability prior to 1st Oct 2020
+
+```{r}
+id_3year <- cdm_eligible$individual %>%
+  filter(enrol_date > as.Date("2017-10-01")) %>% 
+  distinct(id)
+cat("Individuals with <3 years of data availability prior to 1st Oct 2020 ", nrow(id_3year), " individuals")
+
+```
+
+-   Apply the general exclusion criteria to all tables
+
+```{r}
+id_general_exclusion <- bind_rows(id_miss_vacc, id_hetero_vacc, id_miss_covid, id_3year) %>%
+  distinct()
+
+cdm_eligible <- lapply(cdm_eligible, \(df) {
+  if (!"id" %in% names(df)) df else
+    dplyr::anti_join(df, id_general_exclusion, by = "id")
+})
+
+id_general_inclusion <- cdm_eligible$individual %>% distinct(id)
+
+cat("Generally excluded individuals: ", nrow(id_general_exclusion))
+```
+
+### Specific exclusion criteria to each outcome
+
+```{r}
+# Three tables for each outcome
+
+cdm_eligible$myo <- cdm_eligible$outcome_event %>%
+  filter(event_id == "MYO")
+
+cdm_eligible$pe <- cdm_eligible$outcome_event %>%
+  filter(event_id == "PE")
+
+cdm_eligible$thrc <- cdm_eligible$outcome_event %>%
+  filter(event_id == "THRC")
+
+cat("Number of events per outcome before applying outcome-specific exclusion:")
+cdm_eligible$outcome_event %>% group_by(event_name) %>% summarise(n_event = n())
+```
+
+#### Inpatient diagnosis of the outcome between 1st October 2017 and 30th September 2020
+
+```{r}
+prior_outcome <- cdm_cleaned$outcome_event %>%
+  dplyr::semi_join(id_general_inclusion, by = "id") %>%
+  dplyr::filter(!is.na(diagnosis_date) & 
+                  diagnosis_date <= as.Date("30-09-2020", format = "%d-%m-%Y") &
+                  diagnosis_date >= as.Date("01-10-2017", format = "%d-%m-%Y"))
+
+id_prior_myo <- prior_outcome %>%
+  filter(event_id == "MYO") %>%
+  distinct(id)
+
+id_prior_pe <- prior_outcome %>%
+  filter(event_id == "PE") %>%
+  distinct(id)
+
+id_prior_thrc <- prior_outcome %>%
+  filter(event_id == "THRC") %>%
+  distinct(id)
+
+cat("Prior MYO: ", nrow(id_prior_myo), " individuals")
+cat("Prior PE: ", nrow(id_prior_pe), " individuals")
+cat("Prior THRC: ", nrow(id_prior_thrc), " individuals")
+
+# Exclude individuals with prior events from each outcome table
+
+cdm_eligible$myo <- cdm_eligible$myo %>%
+  dplyr::anti_join(id_prior_myo, by = "id")
+
+cdm_eligible$pe <- cdm_eligible$pe %>%
+  dplyr::anti_join(id_prior_pe, by = "id")
+
+cdm_eligible$thrc <- cdm_eligible$thrc %>%
+  dplyr::anti_join(id_prior_thrc, by = "id")
+```
+
+#### Only keep the first event (for each outcome) per individual
+
+```{r}
+cdm_eligible[c("myo", "pe", "thrc")] <- lapply(cdm_eligible[c("myo", "pe", "thrc")], function(df) {
+  df %>%
+    group_by(id) %>%
+    slice_min(diagnosis_date, with_ties = FALSE) %>%
+    ungroup()
+})
+```
+
+- Keep only individuals with events after applying exclusion criteria
+```{r}
+id_final_inclusion <- rbind(cdm_eligible$myo, cdm_eligible$pe, cdm_eligible$thrc) %>%
+  distinct(id)
+
+cdm_eligible <- lapply(cdm_eligible, \(df) {
+  if (!"id" %in% names(df)) df else
+    dplyr::semi_join(df, id_final_inclusion, by = "id")
+})
+```
+
+
+#### Number of events per outcome after applying all eligibility criteria (and before censoring):
+
+```{r}
+cdm_eligible$myo %>% summarise(n_myo = n())
+cdm_eligible$pe %>% summarise(n_pe = n())
+cdm_eligible$thrc %>% summarise(n_thrc = n())
+```
+
+{{< pagebreak >}}
+
+## 2. Apply censoring information
+
+### 1st dose of COVID-19 vaccine other than BNT-162b2 or ChAdOx1
+
+```{r}
+censor_1st_dose <- cdm_eligible$covid_vacc %>%
+  dplyr::filter(!vacc_brand_1 %in% c(1,2)) %>% dplyr::select(id, vacc_date_1)
+```
+
+### 3rd dose of BNT-162b2 or ChAdOx1
+
+```{r}
+censor_3rd_dose <- cdm_eligible$covid_vacc %>%
+  dplyr::select(id, vacc_date_3)
+```
+
+### 1st COVID-19 infection
+
+```{r}
+censor_covid <- cdm_eligible$covid_infection %>%
+    dplyr::group_by(id) %>%
+    dplyr::slice_min(infect_date, with_ties = FALSE) %>%
+    dplyr::ungroup()
+```
+
+### Merge information to table `individual` and pick the earliest date before 30 Apr 2022 as censoring date
+
+```{r}
+cdm_eligible$individual <- cdm_eligible$individual %>%
+  dplyr::mutate(admin_end = as.Date("2022-04-30")) %>%
+  dplyr::left_join(censor_1st_dose, by = "id") %>%
+  dplyr::left_join(censor_3rd_dose, by = "id") %>%
+  dplyr::left_join(censor_covid, by = "id")
+```
+
+```{r}
+cdm_eligible$individual <- cdm_eligible$individual %>%
+  mutate(obs_sta_date = as.Date("2020-10-01"),
+         obs_end_date = pmin(admin_end, death_date, deregister_date, vacc_date_1, vacc_date_3, infect_date, na.rm = TRUE))
+```
+
+### Retain only the outcomes during the observation period of each individual
+
+```{r}
+cdm_eligible[c("myo", "pe", "thrc")] <- lapply(cdm_eligible[c("myo", "pe", "thrc")], function(df) {
+  df %>%
+    dplyr::left_join(cdm_eligible$individual %>% select(id, obs_end_date), by = "id") %>%
+    dplyr::filter(diagnosis_date <= obs_end_date)
+})
+```
+
+
+-   Number of events per outcome after censoring:
+
+```{r}
+cdm_eligible$myo %>% summarise(n_myo = n())
+cdm_eligible$pe %>% summarise(n_pe = n())
+cdm_eligible$thrc %>% summarise(n_thrc = n())
+```
+
+## 4. Reshape data for analysis
+
+### Build SCCS data
+
+```{r}
+# Convert the vaccine table to wide format
+
+cdm_eligible$covid_vacc <- cdm_eligible$covid_vacc %>%
+  mutate(
+    vacc_brand_1 = factor(vacc_brand_1, levels = c(1,2,3), labels = c("bnt", "chad", "others")),
+    vacc_brand_2 = factor(vacc_brand_2, levels = c(1,2,3), labels = c("bnt", "chad", "others")),
+    vacc_brand_3 = factor(vacc_brand_3, levels = c(1,2,3), labels = c("bnt", "chad", "others"))
+  )
+
+cdm_eligible$covid_vacc_wide <- cdm_eligible$covid_vacc %>%
+  tidyr::pivot_longer(
+    cols = starts_with("vacc_"),
+    names_to = c(".value", "dose"),
+    names_pattern = "vacc_(date|brand)_(\\d+)"
+  ) %>%
+  filter(!is.na(date), !is.na(brand), brand !="others", dose != 3) %>%
+  dplyr::mutate(brand_dose = paste0(brand, "_", dose,"_date")) %>% 
+  select(-c(brand, dose, same_brand_primary)) %>%
+  tidyr::pivot_wider(names_from = brand_dose, values_from = date)
+```
+
+
+```{r}
+# Check if the `individual` table and `vacc` table do not have duplicate ids
+
+if (any(duplicated(cdm_eligible$individual$id))) {
+  dup_individual <- cdm_eligible$individual %>%
+    group_by(id) %>%
+    filter(n() > 1) %>%
+    ungroup()
+
+  warning(
+    sprintf(
+      "individual table has %d duplicated ids",
+      n_distinct(dup_individual$id)
+    ))}
+
+if (any(duplicated(cdm_eligible$covid_vacc_wide$id))) {
+  dup_vacc <- cdm_eligible$covid_vacc_wide %>%
+    group_by(id) %>%
+    filter(n() > 1) %>%
+    ungroup()
+
+  warning(
+    sprintf(
+      "vacc table has %d duplicated ids",
+      n_distinct(dup_vacc$id)
+    ))}
+```
+
+<!-- Note: If the above messages were actually printed, please inspect the data before continue with the workflow  -->
+
+```{r}
+# Merge each outcome table with `individual` and `vaccine` table
+cdm_eligible[c("myo_sccs", "pe_sccs", "thrc_sccs")] <-
+  lapply(cdm_eligible[c("myo", "pe", "thrc")], function(df) {
+    df %>%
+      select(-c(hosp_id, coding_system, event_group)) %>%
+      left_join(cdm_eligible$individual %>% 
+                  dplyr::select(id, obs_sta_date), by = "id") %>%
+      left_join(cdm_eligible$covid_vacc_wide, by = "id")
+  })
+```
+
+```{r}
+# Assign 2020-10-01 (start of observation) as 'Day 1' and calculate the day of exposure/ outcome/ end of observation accordingly
+
+date_cols <- c(
+  "obs_end_date",
+  "bnt_1_date",
+  "bnt_2_date",
+  "chad_1_date",
+  "chad_2_date",
+  "diagnosis_date"
+)
+
+cdm_eligible[c("myo_sccs", "pe_sccs", "thrc_sccs")] <-
+  lapply(cdm_eligible[c("myo_sccs", "pe_sccs", "thrc_sccs")], function(df) {
+  df %>%
+        mutate(
+    across(
+      all_of(date_cols),
+      ~ as.Date(.x)
+    )) %>%
+        mutate(
+    obs_sta = 1,
+    across(
+      all_of(date_cols),
+      ~ as.integer(.x - obs_sta_date) + 1,
+      .names = "{sub('_date$', '', .col)}"
+    )
+  )
+    })
+```
+
+### Determine comorbidities status
+
+```{r}
+# Filter diagnoses within one year before start of observation
+cdm_eligible$comorb_stat <- cdm_eligible$comorbidity %>%
+    dplyr::filter(!is.na(diagnosis_date) & 
+                  diagnosis_date >= as.Date("01-10-2019", format = "%d-%m-%Y") &
+                  diagnosis_date <= as.Date("30-09-2020", format = "%d-%m-%Y")) %>% distinct(id, event_group)
+
+# Create table of comorbidity status per id
+cdm_eligible$comorb_stat <- cdm_eligible$comorb_stat %>%
+  dplyr::mutate(value = 1) %>%
+  tidyr::pivot_wider(
+    names_from  = event_group,
+    values_from = value,
+    values_fill = 0
+  )
+
+# Rename columns
+cdm_eligible$comorb_stat <- cdm_eligible$comorb_stat %>%
+  rename(
+    cvd   = `Cardiovascular disease`,
+    cancer = Cancer,
+    diabetes = Diabetes,
+    lung_disease  = `Chronic lung disease`,
+    ckd   = `Chronic kidney disease`
+  )
+
+# Because the comorb_stat table only has individuals with comorbidities, we add other ids from `individual` table and set all statuses = 0
+
+cdm_eligible$comorb_stat <- cdm_eligible$individual %>%
+  select(id) %>%
+  left_join(cdm_eligible$comorb_stat, by = "id") %>%
+  mutate(across(-id, ~ replace_na(.x, 0)))
+```
+
+### Final data for analysis
+
+```{r}
+# Create the sub-folder inside the root folder to store the datasets
+out_dir <- file.path(here("Processed_data"))
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Export the datatsets to .rds files
+for (df in names(cdm_eligible)) {
+  saveRDS(
+    cdm_eligible[[df]],
+    file = file.path(out_dir, paste0(df, ".rds")))
+}
+```
+
+
+- Skim the final datasets:
+```{r}
+lapply(cdm_eligible[c("myo_sccs", "pe_sccs", "thrc_sccs", "comorb_stat", "individual")], summary)
+lapply(cdm_eligible[c("myo_sccs","comorb_stat", "individual")], base_summary)
+```
+
