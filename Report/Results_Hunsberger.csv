@@ -1,0 +1,13 @@
+"","outcome","exposure","error","total_event","optimal_window_days","p_value","events_in_window","excess_risk","er_ci_low","er_ci_up"
+"1","myo","bnt_1","Insufficient events",NA,NA,NA,NA,NA,NA,NA
+"2","myo","bnt_2","Insufficient events",NA,NA,NA,NA,NA,NA,NA
+"3","myo","chad_1",NA,2,47,0.4396,1,2.02127659574468,NA,NA
+"4","myo","chad_2","Insufficient events",NA,NA,NA,NA,NA,NA,NA
+"5","pe","bnt_1",NA,4,NA,1,NA,NA,NA,NA
+"6","pe","bnt_2",NA,2,81,0.768,1,1.17283950617284,NA,NA
+"7","pe","chad_1","Insufficient events",NA,NA,NA,NA,NA,NA,NA
+"8","pe","chad_2","Insufficient events",NA,NA,NA,NA,NA,NA,NA
+"9","thrc","bnt_1","Insufficient events",NA,NA,NA,NA,NA,NA,NA
+"10","thrc","bnt_2","Insufficient events",NA,NA,NA,NA,NA,NA,NA
+"11","thrc","chad_1","Insufficient events",NA,NA,NA,NA,NA,NA,NA
+"12","thrc","chad_2","Insufficient events",NA,NA,NA,NA,NA,NA,NA
