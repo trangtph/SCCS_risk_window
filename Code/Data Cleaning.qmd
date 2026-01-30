@@ -55,23 +55,6 @@ individual <- import(here("Raw_data","individual.sas7bdat"))
 outcome_event <- import(here("Raw_data", "outcome_event2.csv"))
 covid_infection <- import(here("Raw_data","covid_infection2.csv"))
 covid_vacc <- import(here("Raw_data","covid_vacc2.csv"))
-
-new_thrc <- data.frame(ID = sample(individual$ID, size = 50, replace = FALSE),
-                  HOSP_ID = rep(NA_character_, 50),
-                  primary_diagnosis = as.integer(rep(1, 50)),
-                  diagnosis_date = as.Date(sample(seq(as.Date("2020-01-01"),
-                                                      as.Date("2022-05-31"), 
-                                                      by = "day"), 
-                                                  size = 50, replace = TRUE)),
-                  diagnosis_code = sample(c("M311", "D693", "D694"), size = 50, replace = TRUE),
-                  coding_system = rep("ICD10CM", 50),
-                  hosp_id_new = rep(NA_character_, 50),
-                  id_new = rep(NA_character_, 50)
-    )
-
-outcome_event2 <- rbind(outcome_event, new_thrc)
-export(outcome_event2, here("outcome_event2.csv"))
-outcome_event <- outcome_event2
 ```
 
 ## 0. Data cleaning
