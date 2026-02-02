@@ -55,6 +55,7 @@ individual <- import(here("Raw_data","individual.sas7bdat"))
 outcome_event <- import(here("Raw_data", "outcome_event2.csv"))
 covid_infection <- import(here("Raw_data","covid_infection2.csv"))
 covid_vacc <- import(here("Raw_data","covid_vacc2.csv"))
+
 ```
 
 ## 0. Data cleaning
@@ -68,10 +69,7 @@ cdm <- list(individual = individual,
             outcome_event = outcome_event, 
             comorbidity = comorbidity)
 
-#lapply(cdm, skimr::skim)
-
 lapply(cdm, summary)
-
 
 # Count empty cells and unique cells
 base_summary <- function(df) {
@@ -89,6 +87,28 @@ base_summary <- function(df) {
 cat("Data type, number of empty cells and number of unique values per variable:")
 
 lapply(cdm, base_summary)
+```
+
+- Skim the date format:
+
+<!--- Note: Please look at the output of this chunk to check if the format of all the date columns (except the column `birth_date`), is one of the following: dd/mm/yyyy, dd-mm-yyyy, yyyy-mm-dd, yyyy/mm/dd. If not, please convert them to the above format before continue. --->
+
+```{r}
+#| label: "skim_date_format"
+#
+date_skim <- function(df, date_pattern = "_date(_\\d+)?$") {
+  date_cols <- grep(date_pattern, names(df), value = TRUE)
+  for (col in date_cols) {
+    cat(col)
+    x <- df[[col]]
+    str(x)
+  }}
+  
+  
+lapply(cdm, function(df){
+  df |>
+    date_skim()
+})
 ```
 
 ### Format variables
@@ -120,13 +140,13 @@ cdm_cleaned <- lapply(cdm_cleaned, function(df) {
   df
 })
 
-
 # Convert columns to correct data types
 num_cols <- c("birth_date", "birth_month", "birth_year")
 cdm_cleaned$individual <- cdm_cleaned$individual %>% 
   mutate_at(num_cols, as.integer)
 
 cdm_cleaned$individual$sex <- factor(cdm_cleaned$individual$sex, levels = c(1,2,3), labels = c("Male", "Female", "Unknown"))
+
 cdm_cleaned$comorbidity$origin_of_event <- as.factor(cdm_cleaned$comorbidity$origin_of_event)
 
 # Double check coding of COVID vacc
@@ -147,7 +167,7 @@ cdm_cleaned$covid_vacc <- cdm_cleaned$covid_vacc %>%
 ```
 
 ```{r}
-# Function to Convert date columns to date format
+# Function to Convert date columns to `Date` format
 convert_date <- function(df, 
                          date_pattern = "_date(_\\d+)?$",
                          orders = c("dmy", "ymd")) {
@@ -195,13 +215,23 @@ convert_date <- function(df,
 
   df
 }
+```
+
+```{r}
+# Apply the function to each dataset
+
+# Please check if any of the following command shows the warnings of failed date column conversion 
+cdm_cleaned$individual <- convert_date(cdm_cleaned$individual)
+cdm_cleaned$covid_infection <- convert_date(cdm_cleaned$covid_infection)
+cdm_cleaned$covid_vacc <- convert_date(cdm_cleaned$covid_vacc)
+cdm_cleaned$outcome_event <- convert_date(cdm_cleaned$outcome_event)
+cdm_cleaned$comorbidity <- convert_date(cdm_cleaned$comorbidity)
 
 
-# Apply the function
-cdm_cleaned <- lapply(cdm_cleaned, function(df){
-  df |>
-    convert_date()
-})
+#cdm_cleaned <- lapply(cdm_cleaned, function(df){
+#  df |>
+#    convert_date()
+#})
 ```
 
 ### Add calculated variables
@@ -216,6 +246,19 @@ cdm_cleaned$individual$age <- 2020 - cdm_cleaned$individual$birth_year
 lapply(cdm_cleaned, summary)
 cat("Number of empty cells and unique values per variable:")
 lapply(cdm_cleaned, base_summary)
+```
+
+- Skim the date format:
+
+<!--- Note: Please look at the output of this chunk to check if the format of all the date columns (except the column `birth_date`) is of type "Date", formatted as yyyy-mm-dd. --->
+
+```{r}
+#| label: "skim_date_format_clean"
+
+lapply(cdm_cleaned, function(df){
+  df |>
+    date_skim()
+})
 ```
 
 ### Add names of the outcome and covariate
@@ -316,11 +359,14 @@ cdm_cleaned$comorbidity <- cdm_cleaned$comorbidity %>%
 
 ```{r output = FALSE}
 # Check if the event_id and event_group are added correctly to the two tables
+
+# Please look at the two last columns `event_name` and `event_group` of the below tables to see if they show the matching outcome names as expected
+
 View(cdm_cleaned$outcome_event)
 View(cdm_cleaned$comorbidity)
 ```
 
--   Some sanity check: Any ICDs not classified in outcome and comorb tables?
+-   Some sanity check: Any ICDs not classified in outcome and comorb tables? (it should be 0)
 
 ```{r}
 
@@ -354,7 +400,7 @@ cat("Age >= 12yo: ", nrow(id_12), " individuals")
 -   Obs period 1st Oct 2020 - 30 Apr 2022
 
 ```{r}
-# Individuals with outcomes in the observation period
+# Filter individuals with outcomes in the observation period
 id_outcome_obs_period <- cdm_cleaned$outcome_event %>%
   dplyr::filter(!is.na(diagnosis_date) & 
                   diagnosis_date >= as.Date("01-10-2020", format = "%d-%m-%Y") &
