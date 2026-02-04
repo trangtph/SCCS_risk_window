@@ -89,7 +89,7 @@ cat("Data type, number of empty cells and number of unique values per variable:"
 lapply(cdm, base_summary)
 ```
 
-- Skim the date format:
+-   Skim the date format:
 
 <!--- Note: Please look at the output of this chunk to check if the format of all the date columns (except the column `birth_date`), is one of the following: dd/mm/yyyy, dd-mm-yyyy, yyyy-mm-dd, yyyy/mm/dd. If not, please convert them to the above format before continue. --->
 
@@ -248,7 +248,7 @@ cat("Number of empty cells and unique values per variable:")
 lapply(cdm_cleaned, base_summary)
 ```
 
-- Skim the date format:
+-   Skim the date format:
 
 <!--- Note: Please look at the output of this chunk to check if the format of all the date columns (except the column `birth_date`) is of type "Date", formatted as yyyy-mm-dd. --->
 
