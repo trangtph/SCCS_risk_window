@@ -128,6 +128,61 @@ plot_monthly_counts(cdm_sccs$covid_vacc_wide,
                     date_var = chad_2_date,  
                     label = "ChAd dose 2",ylab = "Number of vaccinations")
 ```
+### Dosing interval
+
+- `bnt_interval` and `chad_interval`: interval between vaccine dose 1 and the earliest of (dose 2, end of observation).
+
+- `bnt2_to_end` and `chad2_to_end`: interval between dose 2 and end of observation. 
+
+```{r}
+# Calculate the interval between dose 1 and dose 2, and between dose 2 and end of observation
+cdm_sccs$covid_vacc_wide <- cdm_sccs$covid_vacc_wide %>%
+  left_join(cdm_sccs$individual %>% select(id, obs_end_date), by = "id")
+  
+cdm_sccs$covid_vacc_wide <- cdm_sccs$covid_vacc_wide %>%
+  mutate(bnt_interval = ifelse(!is.na(bnt_2_date), 
+                               as.numeric(pmin(bnt_2_date, obs_end_date) - bnt_1_date),
+                               as.numeric(obs_end_date - bnt_1_date)),
+         bnt2_to_end =  as.numeric(obs_end_date) - as.numeric(bnt_2_date),
+         chad_interval = ifelse(!is.na(chad_2_date), 
+                               as.numeric(pmin(chad_2_date, obs_end_date) - chad_1_date),
+                               as.numeric(obs_end_date - chad_2_date)),
+         chad2_to_end =  as.numeric(obs_end_date) - as.numeric(chad_2_date)
+         )
+```
+
+```{r}
+#| label: fig-dose-interval
+#| fig-cap: "Interval in days between dose 1 and dose 2, and between dose 2 and end of observation"
+#| fig-height: 5
+
+# Summarise the intervals
+vars <- c(
+  "bnt_interval",
+  "bnt2_to_end",
+  "chad_interval",
+  "chad2_to_end"
+)
+
+summary(cdm_sccs$covid_vacc_wide[
+  , vars
+])
+
+# Histograms of intervals
+par(mfrow = c(2, 2), mar = c(4, 4, 2, 1))
+
+for (v in vars) {
+  hist(
+    cdm_sccs$covid_vacc_wide[[v]],
+    breaks = 30,
+    main = v,
+    xlab = "Days",
+    col = "grey",
+    border = "white"
+  )
+}
+```
+
 
 ### Distribution of 1st COVID-19 infection
 
@@ -367,8 +422,6 @@ The centred observation plot reflects design constraints: number of exposed case
 
 ## Baseline characteristics of cases (per outcome)
 
--   Baseline characteristics of myocarditis cases:
-
 ```{r}
 #Merge baseline characteristic info into one table
 cdm_sccs[c("myo_baseline", "pe_baseline", "thrc_baseline")] <-
@@ -520,13 +573,9 @@ add_group_N_to_header <- function(ft, group_sizes) {
   flextable::set_header_labels(ft, values = header_map)
 }
 
-
-
 ```
 
 ```{r}
-#| tbl-cap: "Baseline characteristics of cases"
-
 # Make the table
 tbl_baseline <- make_table1(
   cdm_sccs$basline_all,
@@ -537,14 +586,12 @@ tbl_baseline <- make_table1(
 )
 ```
 
-
 ```{r eval=TRUE}
-#| label: "tbl-baseline"
-#| tbl-cap: "Baseline characteristics of cases"
+#| results: asis
+# Note: If package `flextable` is not available, change eval = FALSE to this chunk,and change eval = TRUE to the chunk below this.
 
-# Note: If package `flextable` is not available, change eval = FALSE to this chunk and change eval = TRUE to the chunk below this.
-
-tbl_baseline_format <- flextable(tbl_baseline) |>
+tbl_baseline_format <- flextable::flextable(tbl_baseline) |>
+  set_caption("Baseline characteristics of cases") |>
   bold(part = "header") |>
   fontsize(size = 11) |>
   align(align = "center", part = "header") |>
@@ -558,9 +605,5 @@ tbl_baseline_format
 ```
 
 ```{r eval=FALSE}
-#| label: "tbl-baseline2"
-#| tbl-cap: "Baseline characteristics of cases"
-#| 
 tbl_baseline
 ```
-
