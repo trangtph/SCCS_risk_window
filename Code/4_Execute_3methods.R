@@ -10,8 +10,8 @@
 
 ## Load functions and packages
 
-source(here("Code", "Fit_SCCS_3methods.R"))
-source(here("Code", "Helper_functions.R"))
+source(here("Code", "3_Functions_3methods.R"))
+source(here("Code", "0_Helper_functions.R"))
 
 library(dplyr)
 library(SCCS)
@@ -44,7 +44,7 @@ cdm_sccs <- lapply(cdm_sccs, function(df) {
 
 ## Specify parameters ----------------------------------------------------------
 
-risk_win <- seq(1, 10, by = 1)
+risk_win <- seq(15, 20, by = 1)
 calendar_interval <- 30
 dataset <- c("myo_sccs", "pe_sccs", "thrc_sccs")
 
@@ -68,6 +68,6 @@ results_raw_3meth <- foreach(dat = dataset,
     
   }
 
-## Export the results
+## Export the results ----------------------------------------------------------
 
 write.csv(results_raw_3meth, here("Report", "Results_raw_3methods.csv"))

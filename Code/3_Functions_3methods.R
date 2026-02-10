@@ -412,13 +412,14 @@ loop_4_exp <- function(
       model_type = "null_mod"
     )
     
-    ## Stage 3. Merge results
+    ## Stage 3. Merge results and compute LR test
     
-    stage <- "fit_sccs_3meth_nullmod"
+    stage <- "merge_full_null"
     
     res_full2 <- res_full %>% 
       left_join(res_null, by = c("outcome", "exposure", "method")) %>%
-      relocate(lr_null, .after = lr_full)
+      mutate(lr_test = lr_full - lr_null) %>%
+      relocate(c(lr_null, lr_test), .after = lr_full)
     
     res_full2
     
