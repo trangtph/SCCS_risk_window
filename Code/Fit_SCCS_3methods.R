@@ -5,6 +5,7 @@
 ################################################################################
 
 ## 0. Function to edit SCCS data to take into account precedence rule ----------
+
 # Helper function to apply precedence logic for dose 2:
 # If pre-exposure for dose 2 overlaps with risk period of dose 1, dose 1 takes priority
 # Case 1: If gap between dose1 & dose2 <= entire risk period, pre-exposure for dose2 = NA 
@@ -22,7 +23,10 @@ compute_pre_ex_dose2 <- function(dose1, dose2, risk1, pre_ex) {
   )
 }
 
-# Function to compute pre-exposure period for all exposures in the dataset:
+# Function to prep the dataset:
+# - Compute pre-exposure period for all exposures
+# - Flexibly assign the risk window to each exposure depending on which exposure is under scanning
+# - Obtain correct variable names for extracting the SCCS model results
 
 sccs_prep <- function(data,
                       risk_scan, # The risk window we are scanning for the expo_of_interest
@@ -33,6 +37,7 @@ sccs_prep <- function(data,
                        ) {
   
   # Assign correct risk window to each exposure
+  # window of exposure under scanning = risk_scan, all other exposures' windows = 70
   risk <- c(
     scan   = risk_scan,
     bnt_1  = max_risk_win,
@@ -42,6 +47,18 @@ sccs_prep <- function(data,
   )
   
   risk[expo_of_interest] <- risk["scan"]
+  
+  # For null model for Xu_2013: set risk_scan = 0
+  
+  risk_null <- c(
+    bnt_1  = max_risk_win,
+    bnt_2  = max_risk_win,
+    chad_1 = max_risk_win,
+    chad_2 = max_risk_win
+  )
+  
+  risk_null[expo_of_interest] <- 0
+  
   
   # Compute pre-exposure period for all exposures
   data_out <- data %>%
@@ -72,6 +89,7 @@ sccs_prep <- function(data,
   list(
     data = data_out,
     risk = risk,
+    risk_null = risk_null,
     expo_dat = expo_dat,
     expo_level = expo_level,
     expo_mod = expo_mod,
@@ -105,7 +123,8 @@ fit_sccs_3meth <- function(
     expo_mod,
     expo_dat,
     expo_level,
-    outcome_name
+    outcome_name,
+    model_type = "full_mod" # specify "null_mod" to fit a null model for Xu_2013
 ){
   # 1. Data reshaping -----------------------------------------------------
   yon <- deparse(substitute(adrug)) 
@@ -199,7 +218,34 @@ fit_sccs_3meth <- function(
   T_L <- sum(exposure_data$interval) / length(unique(exposure_data$indivL))
   T_L1 <- 1/ T_L
   
-  # 2. Fit standard SCCS model (for Xu_2011 and Campos_2017) -------------------
+  
+  # 2. Fit a null model for Xu_2013 if model_type = null_mod -------------------
+  
+  if (model_type == "null_mod"){
+    
+    ## Make model formula
+    fmla_null <- paste(formula, "+", "offset(log(interval))", "|", "indivL")
+    fmla_null1 <- as.formula(paste("event~", fmla_null[3]))
+    
+    
+    ## Fit the null fixed-effect Poisson regression and extract log-likelihood
+    
+    mod_null <- fixest::fepois(fml = fmla_null1, data = chopdat)
+    sum_mod_null <- summary(mod_null)
+    lr_null <- logLik(mod_null)
+    
+    
+    model_stat_null <- data.frame(
+      outcome = outcome_name,
+      exposure = expo_of_interest,
+      lr_null, 
+      method = "fePois")
+    
+    return(model_stat_null)
+    
+  } else if (model_type == "full_mod") { 
+    
+  # 3. Fit standard SCCS model (for Xu_2011 and Campos_2017) -------------------
   
   ## Get the model formula and fit the model
   fmla <- paste(formula, "+", "strata(indivL)", "+", "offset(log(interval))")
@@ -224,30 +270,21 @@ fit_sccs_3meth <- function(
     T_L, T_L1, est_L, IRR_L,
     se_L, p_val,
     IRR_L_low_CI, IRR_L_up_CI,
-    lr_null = NA, lr_full = NA, lr_test = NA, 
+    lr_full = NA, 
     method = "stdSCCS", converge)
   
-  # 3. Fit fixed-effect Poisson models (for Xu_2013) ---------------------------
+  # 4. Fit fixed-effect Poisson models (for Xu_2013) ---------------------------
   
   ## Make model formula for the full model
   fmla_full <- paste(formula, "+", "offset(log(interval))", "|", "indivL")
   fmla_full1 <- as.formula(paste("event~", fmla_full[3]))
   
-  ## Make model formula for the null model (model without the effect that we want to scan for the risk window)
-  #fmla_null <- paste(formula_null, "+", "offset(log(interval))", "|", "indivL")
-  #fmla_null1 <- as.formula(paste("event~", fmla_null[3]))
   
-  ## Fit the full and null fixed-effect Poisson regression and extract log-likelihood
+  ## Fit the full fixed-effect Poisson regression and extract log-likelihood
   
   mod_full <- fixest::fepois(fml = fmla_full1, data = chopdat)
   sum_mod_full <- summary(mod_full)
   lr_full <- logLik(mod_full)
-  
-  #mod_null <- fixest::fepois(fml = fmla_null1, data = chopdat)
-  #lr_null <- logLik(mod_null)
-  
-  ## log likelihood ratio test statistic
-  #lr_test <- lr_full - lr_null
   
   ## Export model statistics
   main_expo <- expo_mod
@@ -266,14 +303,19 @@ fit_sccs_3meth <- function(
     est_L = est_L_fe, IRR_L = IRR_L_fe,
     se_L = se_L_fe, p_val = p_val_fe,  
     IRR_L_low_CI = IRR_L_low_CI_fe, IRR_L_up_CI = IRR_L_up_CI_fe,
-    lr_null = NA, lr_full , lr_test = NA, 
+    lr_full, 
     method = "fePois", converge = converge_fe)
   
   
   all_results <- rbind(model_stat, model_stat_fe)
   
   return(all_results)
+  }
+  else {stop("Model type must be full_mod or null_mod")}
 }
+
+
+
 
 ## 2. Function to loop `fit_sccs_3meth` through 4 exposures --------------------
 
@@ -288,6 +330,13 @@ loop_4_exp <- function(
   
   foreach(expo = expo_to_scan, .combine = rbind) %do% {
     
+    stage <- "sccs_prep"
+    outcome_name <- NA_character_
+    
+    tryCatch({
+      
+      ## Stage 1: preparation ----
+    
     dat_sccs_prep <- sccs_prep(
       data = data,
       pre_ex = pre_ex,
@@ -297,7 +346,12 @@ loop_4_exp <- function(
       calendar_adj = calendar_adjustment
     )
     
-    fit_sccs_3meth(
+    outcome_name <- tolower(unique(dat_sccs_prep$data$event_id))
+    
+    ## Stage 2: model fitting ----
+    stage <- "fit_sccs_3meth_fullmod"
+    
+    res_full <- fit_sccs_3meth(
       formula = event ~ bnt_1 + chad_1 + pre_bnt_1 + age,
       indiv = id_num,
       astart = obs_sta,
@@ -306,15 +360,13 @@ loop_4_exp <- function(
       adrug = list(
         cbind(bnt_1, bnt_2),
         cbind(chad_1, chad_2),
-        cbind(pre_bnt_1, pre_bnt_2, pre_chad_1, pre_chad_2)
-      ),
+        cbind(pre_bnt_1, pre_bnt_2, pre_chad_1, pre_chad_2)),
       aedrug = list(
         cbind(bnt_1 + dat_sccs_prep$risk[["bnt_1"]],
               bnt_2 + dat_sccs_prep$risk[["bnt_2"]]),
         cbind(chad_1 + dat_sccs_prep$risk[["chad_1"]],
               chad_2 + dat_sccs_prep$risk[["chad_2"]]),
-        cbind(bnt_1 - 1, bnt_2 - 1, chad_1 - 1, chad_2 - 1)
-      ),
+        cbind(bnt_1 - 1, bnt_2 - 1, chad_1 - 1, chad_2 - 1)),
       expogrp = list(c(0,1), c(0,1), c(0)),
       washout = list(),
       sameexpopar = c(FALSE, FALSE, FALSE),
@@ -324,8 +376,75 @@ loop_4_exp <- function(
       expo_mod = dat_sccs_prep$expo_mod,
       expo_dat = dat_sccs_prep$expo_dat,
       expo_level = dat_sccs_prep$expo_level,
-      outcome_name = tolower(unique(dat_sccs_prep$data$event_id))
+      outcome_name = outcome_name
     )
+    
+    ## Stage 2.2. Fit null model for Xu_2013
+    
+    stage <- "fit_sccs_3meth_nullmod"
+    
+    res_null <- fit_sccs_3meth(
+      formula = event ~ bnt_1 + chad_1 + pre_bnt_1 + age,
+      indiv = id_num,
+      astart = obs_sta,
+      aend = obs_end,
+      aevent = diagnosis,
+      adrug = list(
+        cbind(bnt_1, bnt_2),
+        cbind(chad_1, chad_2),
+        cbind(pre_bnt_1, pre_bnt_2, pre_chad_1, pre_chad_2)),
+      aedrug = list(
+        cbind(bnt_1 + dat_sccs_prep$risk_null[["bnt_1"]],
+              bnt_2 + dat_sccs_prep$risk_null[["bnt_2"]]),
+        cbind(chad_1 + dat_sccs_prep$risk_null[["chad_1"]],
+              chad_2 + dat_sccs_prep$risk_null[["chad_2"]]),
+        cbind(bnt_1 - 1, bnt_2 - 1, chad_1 - 1, chad_2 - 1)),
+      expogrp = list(c(0,1), c(0,1), c(0)),
+      washout = list(),
+      sameexpopar = c(FALSE, FALSE, FALSE),
+      agegrp = dat_sccs_prep$calendar_grp,
+      data = dat_sccs_prep$data,
+      expo_of_interest = dat_sccs_prep$expo_interst,
+      expo_mod = dat_sccs_prep$expo_mod,
+      expo_dat = dat_sccs_prep$expo_dat,
+      expo_level = dat_sccs_prep$expo_level,
+      outcome_name = outcome_name,
+      model_type = "null_mod"
+    )
+    
+    ## Stage 3. Merge results
+    
+    stage <- "fit_sccs_3meth_nullmod"
+    
+    res_full2 <- res_full %>% 
+      left_join(res_null, by = c("outcome", "exposure", "method")) %>%
+      relocate(lr_null, .after = lr_full)
+    
+    res_full2
+    
+    }, error = function(e) {
+      
+      ## Log error if occur ----
+      log_error(
+        sprintf(
+          "Stage: %s | Exposure: %s | Risk window: %d | Outcome: %s | Error: %s",
+          stage, expo, risk_scan, outcome_name, conditionMessage(e)
+        )
+      )
+      
+      ## ---- Placeholder result ----
+      data.frame(
+        outcome = outcome_name,
+        exposure = expo,
+        T_L = NA, T_L1 = NA,
+        est_L = NA, IRR_L = NA,
+        se_L = NA, p_val = NA,
+        IRR_L_low_CI = NA, IRR_L_up_CI = NA,
+        lr_full = NA, lr_null = NA,
+        method = NA,
+        converge = FALSE
+      )
+    })
   }
 }
 
@@ -351,7 +470,10 @@ loop_risk_win <- function(risk_win = seq(1, 70, by = 1),
                                .combine = rbind) %do% 
     { 
       i <- risk_win[k]
-      message(paste("Scanning risk window:", i, "days, at", Sys.time()))
+      message(sprintf(
+        "Scanning risk window: %d days (%s)",
+        i, Sys.time()
+      ))
       
       res_1_risk_win <- loop_4_exp(risk_scan = i, 
                                    data = data, 
