@@ -42,13 +42,17 @@ cdm_sccs <- lapply(cdm_sccs, function(df) {
   df
 })
 
-## Specify parameters ----------------------------------------------------------
+## -----------------------------------------------------------------------------
+## Part 1: Generate raw results for three methods ------------------------------
+## -----------------------------------------------------------------------------
+
+### Specify parameters ----------------------------------------------------------
 
 risk_win <- seq(15, 20, by = 1)
 calendar_interval <- 30
 dataset <- c("myo_sccs", "pe_sccs", "thrc_sccs")
 
-## Implement the analysis ------------------------------------------------------
+### Implement the analysis ------------------------------------------------------
 
 results_raw_3meth <- foreach(dat = dataset,
                              .combine = rbind) %do% 
@@ -68,6 +72,41 @@ results_raw_3meth <- foreach(dat = dataset,
     
   }
 
-## Export the results ----------------------------------------------------------
+### Export the results ---------------------------------------------------------
 
 write.csv(results_raw_3meth, here("Report", "Results_raw_3methods.csv"))
+
+## -----------------------------------------------------------------------------
+## Part 2: Generate null distributions for p-value calculation (Xu_2013) -------
+## -----------------------------------------------------------------------------
+
+### Specify parameters ---------------------------------------------------------
+
+n_sim <- 2000
+calendar_interval <- 30
+dataset <- c("myo_sccs", "pe_sccs", "thrc_sccs") 
+
+### Implement the analysis -----------------------------------------------------
+
+null_dist_all_data <- foreach(dat = dataset,
+                             .combine = rbind) %do% 
+  {
+    message(paste("Analysing dataset:", dat, "at", Sys.time()))
+    
+    if (!dat %in% names(cdm_sccs)) {
+      stop("Dataset '", dat, "' not found in cdm_sccs")
+    }
+    
+    data <- cdm_sccs[[dat]]
+   
+    sim_null_dist_xu2013(
+      seed_list = get_seeds(n_sim = n_sim),
+      n_sim = n_sim,
+      data = data,
+      calendar_interval = calendar_interval,
+    ) 
+  }
+
+### Export the results ---------------------------------------------------------
+
+write.csv(null_dist_all_data, here("Report", "Null_dist_all_data.csv"))
