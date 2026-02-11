@@ -1,8 +1,15 @@
-
+###########################################
+### Project: SCCS Risk Window Scanning ####
+### Author: Trang - Azida              ####
+###########################################
 
 ################################################################################
-# Part 1: Define functions to implement three methods --------------------------
+# Script: Defining functions for methods Xu_2011, Xu_2013 and Campos ###########
 ################################################################################
+
+# ------------------------------------------------------------------------------
+# Part 1: General functions to for three methods -------------------------------
+# ------------------------------------------------------------------------------
 
 ## 0. Function to edit SCCS data to take into account precedence rule ----------
 
@@ -93,7 +100,7 @@ sccs_prep <- function(data,
     expo_dat = expo_dat,
     expo_level = expo_level,
     expo_mod = expo_mod,
-    expo_interst = expo_of_interest,
+    expo_interest = expo_of_interest,
     calendar_grp = calendar_adj
   )
 }
@@ -219,7 +226,8 @@ fit_sccs_3meth <- function(
   T_L1 <- 1/ T_L
   
   
-  # 2. Fit a null model for Xu_2013 if model_type = null_mod -------------------
+  # 2. Only fit fePois model if model_type = null_mod --------------------------
+  # This is for the null model for Xu_2013
   
   if (model_type == "null_mod"){
     
@@ -261,7 +269,7 @@ fit_sccs_3meth <- function(
   p_val <- stats::coef(sum_mod)[main_expo, 'Pr(>|z|)']
   IRR_L_low_CI <- sum_mod$conf.int[main_expo, 'lower .95']
   IRR_L_up_CI <- sum_mod$conf.int[main_expo, 'upper .95']
-  converge <- !(se_L > 10 | is.na(se_L) | is.nan(se_L) | is.infinite(se_L)) # Check convergence
+  converge <- !(se_L > 10 | is.na(est_L) | is.nan(est_L) | is.infinite(se_L)) # Check convergence
   
   
   model_stat <- data.frame(
@@ -294,7 +302,7 @@ fit_sccs_3meth <- function(
   p_val_fe <- sum_mod_full$coeftable[main_expo, 'Pr(>|z|)']
   IRR_L_low_CI_fe <- exp(est_L_fe -1.96*se_L_fe)
   IRR_L_up_CI_fe <- exp(est_L_fe + 1.96*se_L_fe)
-  converge_fe <- !(se_L_fe > 10 | is.na(se_L_fe) | is.nan(se_L_fe) | is.infinite(se_L_fe))
+  converge_fe <- !(se_L_fe > 10 | is.na(est_L_fe) | is.nan(est_L) | is.infinite(se_L_fe))
   
   model_stat_fe <- data.frame(
     outcome = outcome_name,
@@ -313,8 +321,6 @@ fit_sccs_3meth <- function(
   }
   else {stop("Model type must be full_mod or null_mod")}
 }
-
-
 
 
 ## 2. Function to loop `fit_sccs_3meth` through 4 exposures --------------------
@@ -372,7 +378,7 @@ loop_4_exp <- function(
       sameexpopar = c(FALSE, FALSE, FALSE),
       agegrp = dat_sccs_prep$calendar_grp,
       data = dat_sccs_prep$data,
-      expo_of_interest = dat_sccs_prep$expo_interst,
+      expo_of_interest = dat_sccs_prep$expo_interest,
       expo_mod = dat_sccs_prep$expo_mod,
       expo_dat = dat_sccs_prep$expo_dat,
       expo_level = dat_sccs_prep$expo_level,
@@ -404,7 +410,7 @@ loop_4_exp <- function(
       sameexpopar = c(FALSE, FALSE, FALSE),
       agegrp = dat_sccs_prep$calendar_grp,
       data = dat_sccs_prep$data,
-      expo_of_interest = dat_sccs_prep$expo_interst,
+      expo_of_interest = dat_sccs_prep$expo_interest,
       expo_mod = dat_sccs_prep$expo_mod,
       expo_dat = dat_sccs_prep$expo_dat,
       expo_level = dat_sccs_prep$expo_level,
@@ -441,7 +447,7 @@ loop_4_exp <- function(
         est_L = NA, IRR_L = NA,
         se_L = NA, p_val = NA,
         IRR_L_low_CI = NA, IRR_L_up_CI = NA,
-        lr_full = NA, lr_null = NA,
+        lr_full = NA, lr_null = NA, lr_test = NA,
         method = NA,
         converge = FALSE
       )
@@ -477,7 +483,8 @@ loop_risk_win <- function(risk_win = seq(1, 70, by = 1),
       ))
       
       res_1_risk_win <- loop_4_exp(risk_scan = i, 
-                                   data = data, 
+                                   data = data,
+                                   pre_ex = pre_ex,
                                    max_risk_win = max_risk_win,
                                    calendar_adjustment = calendar_adj2)
       res_1_risk_win$candidate_risk_win <- i
@@ -487,5 +494,459 @@ loop_risk_win <- function(risk_win = seq(1, 70, by = 1),
       }
 }
 
+################################################################################
+# Part 2: Specific functions for Xu_2013 ---------------------------------------
+################################################################################
+
+## 2.1. Function to extract the optimal risk window with the maximum LRT -------
+xu2013_maxlr <- function(
+    result_table = results_raw_3meth  
+){
+  maxlr <- result_table %>% 
+    filter(method == "fePois", converge == TRUE) %>%
+    group_by(outcome, exposure) %>% 
+    filter(lr_test == max(lr_test))
+  
+  return(maxlr)
+}
+
+## 2.2. Function to simulate data under the null hypothesis --------------------
+
+sim_null_data_xu2013 <- function(
+    seed,
+    indiv = id_num, 
+    astart = obs_sta, 
+    aend = obs_end, 
+    agegrp, 
+    data,
+    expo_of_interest
+){
+  
+  set.seed(seed)
+  
+  # Step 1: Construct age groups & estimate dose-1 age distribution
+  
+  ## 1.1. Get information from data
+  indiv_string <- deparse(substitute(indiv))
+  astart_vec <- eval(substitute(astart), data, parent.frame())
+  aend_vec   <- eval(substitute(aend), data, parent.frame())
+  
+  ## 1.2. Construct age-group intervals
+  lower <- c(min(astart_vec), agegrp)
+  upper <- c(agegrp - 1, max(aend_vec))
+  
+  agegrp_info <- data.table(
+    lower = lower,
+    upper = upper,
+    age   = as.character(seq_along(lower)))
+  
+  ## 1.3. Extract vaccine exposure history
+  
+  vac_interest <- sub("_.*$", "", expo_of_interest)
+  dose1 <- paste0(vac_interest,"_1")
+  dose2 <- paste0(vac_interest,"_2")
+  
+  vacc_hist <- data[ , c(indiv_string, dose1, dose2)]
+  
+  names(vacc_hist) <- c("indiv", "vax_1", "vax_2")
+  
+  vacc_hist <- vacc_hist[!duplicated(vacc_hist$indiv), ]
+  
+  # Vaccination indicators
+  vacc_hist$has_vax_1 <- !is.na(vacc_hist$vax_1)
+  vacc_hist$has_vax_2 <- !is.na(vacc_hist$vax_2)
+  
+  # Inter-dose spacing (fixed)
+  vacc_hist$delta12 <- with(
+    vacc_hist,
+    ifelse(has_vax_2, vax_2 - vax_1, NA))
+  
+  # Simulate dose 1 if the exposure of interest is dose 1: 
+  
+  if (expo_of_interest %in% c("bnt_1", "chad_1")){
+    
+    ## 1.4. Identify the age group of the dose 1 vaccination date
+    # For each vaccination record, find the age-group interval 
+    # whose [lower, upper] contains the vaccination age,
+    #and assign that age-group number to the record. 
+    
+    vax1_obs <- vacc_hist[vacc_hist$has_vax_1, ]
+    
+    setDT(vax1_obs) # convert to data.table object
+    
+    vax1_obs[
+      agegrp_info,
+      age_group := i.age,
+      on = .(vax_1 >= lower, vax_1 <= upper)]
+    
+    ## 1.5. Empirical age-group probabilities for dose 1
+    prob_vax1_age <- prop.table(table(vax1_obs$age_group))
+    
+    
+    # Step 2: randomly simulate dose 1 vaccination date for each individual using the above multinomial vaccination probabilities & shift dose 2
+    
+    
+    vacc_hist$vax1_sim <- NA_integer_
+    vacc_hist$vax2_sim <- NA_integer_
+    
+    for (i in which(vacc_hist$has_vax_1)) {
+
+        ## 2.1. Randomly assign 'age' group at vaccination for dose 1
+        age_grp <- sample(
+          x    = names(prob_vax1_age),
+          size = 1,
+          prob = as.numeric(prob_vax1_age))
+        
+        bounds <- agegrp_info[age == age_grp]
+        
+        ## 2.2.Sample dose 1
+        t1 <- round(runif(1, bounds$lower, bounds$upper))
+        vacc_hist$vax1_sim[i] <- t1
+        
+        ## 2.3. Shift dose 2 date accordingly if present
+        if (vacc_hist$has_vax_2[i]) {
+          vacc_hist$vax2_sim[i] <- t1 + vacc_hist$delta12[i]
+        }
+        
+        }
+    
+    # Step 3: format data to SCCS-compatible format
+    # 3.1. Merge the simulated vaccination date to the original data 
+    
+    data <- merge(
+      data,
+      vacc_hist[, c("indiv", "vax1_sim", "vax2_sim")],
+      by.x = indiv_string,
+      by.y = "indiv",
+      all.x = TRUE
+    )
+    
+    # Only individuals with simulated values are overwritten
+    if (expo_of_interest == "bnt_1") {
+      data <- data %>%
+        mutate(
+          bnt_1 = ifelse(!is.na(vax1_sim), vax1_sim, bnt_1),
+          bnt_2 = ifelse(!is.na(vax2_sim), vax2_sim, bnt_2))
+    }
+    
+    if (expo_of_interest == "chad_1") {
+      
+      data <- data %>%
+        mutate(
+          chad_1 = ifelse(!is.na(vax1_sim), vax1_sim, chad_1),
+          chad_2 = ifelse(!is.na(vax2_sim), vax2_sim, chad_2))
+    }
+    
+  } else if (expo_of_interest %in% c("bnt_2", "chad_2")) {
+    
+    ## 1.4. Define weekly dosing interval bins and calculate the probability of each bin
+    
+    delta12_obs <- with(
+      vacc_hist[vacc_hist$has_vax_2, ],
+      vax_2 - vax_1
+    )
+    
+    if (length(delta12_obs) == 0) {
+      stop("No individuals with dose 2; cannot generate null distribution for dose 2")
+    }
+    
+    delay_breaks <- seq(
+      from = floor(min(delta12_obs)),
+      to   = ceiling(max(delta12_obs)) + 7,
+      by   = 7
+    )
+    
+    # Assign the weekly bin to the observed dosing interval (e.g delay of 35 days belongs to bin [31, 38))
+    delay_bins <- cut(
+      delta12_obs,
+      breaks = delay_breaks,
+      include.lowest = TRUE,
+      right = FALSE
+    )
+    
+    # multinomial probabilities for delay bins
+    prob_delay_bin <- prop.table(table(delay_bins))
+    
+    # Step 2: randomly simulate dose 2 date using the above multinomial vaccination probabilities
+    
+    vacc_hist$vax2_sim <- NA_integer_
+    
+    for (i in which(vacc_hist$has_vax_2)) {
+      
+        
+        ## 2.1. Randomly assign dosing interval 
+        
+        # sample delay bin
+        bin_star <- sample(
+          x    = names(prob_delay_bin),
+          size = 1,
+          prob = as.numeric(prob_delay_bin)
+        )
+        
+        # extract numeric bounds of the bin
+        bounds <- gsub("\\[|\\)|\\]", "", bin_star)
+        bounds <- as.numeric(strsplit(bounds, ",")[[1]])
+        
+        # sample delay within the bin
+        delta_star <- round(runif(1, min = bounds[1], max = bounds[2]))
+        
+        # Calculate new dose 2 date: = dose 1 + new interval
+        vacc_hist$vax2_sim[i] <- vacc_hist$vax_1[i] + delta_star
+        }
+    
+    # Step 3: format data to SCCS-compatible format
+    # 3.1. Merge the simulated vaccination date to the original data 
+    
+    data <- merge(
+      data,
+      vacc_hist[, c("indiv", "vax2_sim")],
+      by.x = indiv_string,
+      by.y = "indiv",
+      all.x = TRUE
+    )
+    
+    if (expo_of_interest == "bnt_2") {
+      data <- data %>%
+        mutate(
+          bnt_2 = ifelse(!is.na(vax2_sim), vax2_sim, bnt_2))
+    }
+    
+    if (expo_of_interest == "chad_2") {
+      data <- data %>%
+        mutate(
+          chad_2 = ifelse(!is.na(vax2_sim), vax2_sim, chad_2))
+    }
+    
+  }
+  return(data)
+}
+
+## 2.3 Function to loop the process of simulating data and fit fePois model for 4 exposures ----
+
+loop_4_exp_sim <- function(
+    seed,
+    data,
+    pre_ex = 30,
+    max_risk_win = 70,
+    expo_to_scan = c("bnt_1", "bnt_2", "chad_1", "chad_2"),
+    calendar_adjustment
+) {
+  
+  foreach(expo = expo_to_scan, .combine = rbind) %do% {
+    
+    stage <- "xu2013_maxlr"
+    outcome_name <- NA_character_
+    optimal_win <- NA_real_
+
+    tryCatch({
+      
+      ## Stage 1: get the optimal risk window for the exposure ----
+      outcome_name <- tolower(unique(data$event_id))
+      
+      optimal_win <- xu2013_maxlr() %>%
+        filter(
+          exposure == expo,
+          outcome == outcome_name) %>%
+        pull(candidate_risk_win)
+      
+      if (length(optimal_win) == 0 || is.na(optimal_win)) {
+        log_error(
+          sprintf(
+            "Stage: xu2013_maxlr | Exposure: %s | Outcome: %s | No converged risk window",
+            expo, outcome_name))
+
+          data.frame(
+            outcome = outcome_name,
+            exposure = expo,
+            optimal_win = NA,
+            lr_full = NA_real_,
+            lr_null = NA_real_,
+            lr_test = NA_real_,
+            method = "fePois")
+      }
+      
+      ## Stage 2: simulate data under the null hypothesis for the respective exposure and outcome ----
+      
+      stage <- "sim_null_data_xu2013"
+      
+      sim_dat <- sim_null_data_xu2013(
+        seed = seed,
+        indiv = id_num,
+        astart = obs_sta,
+        aend = obs_end,
+        agegrp = calendar_adjustment,
+        data = data,
+        expo_of_interest = expo
+      )
+      
+      ## Stage 3: prepare the data ----
+      
+      stage <- "sccs_prep"
+
+      dat_sccs_prep <- sccs_prep(
+        data = sim_dat,
+        pre_ex = pre_ex,
+        max_risk_win = max_risk_win,
+        risk_scan = optimal_win,
+        expo_of_interest = expo,
+        calendar_adj = calendar_adjustment
+      )
+      
+      ## Stage 4: model fitting ----
+      stage <- "fit_fePois_full"
+      
+      res_full <- fit_sccs_3meth(
+        formula = event ~ bnt_1 + chad_1 + pre_bnt_1 + age,
+        indiv = id_num,
+        astart = obs_sta,
+        aend = obs_end,
+        aevent = diagnosis,
+        adrug = list(
+          cbind(bnt_1, bnt_2),
+          cbind(chad_1, chad_2),
+          cbind(pre_bnt_1, pre_bnt_2, pre_chad_1, pre_chad_2)),
+        aedrug = list(
+          cbind(bnt_1 + dat_sccs_prep$risk[["bnt_1"]],
+                bnt_2 + dat_sccs_prep$risk[["bnt_2"]]),
+          cbind(chad_1 + dat_sccs_prep$risk[["chad_1"]],
+                chad_2 + dat_sccs_prep$risk[["chad_2"]]),
+          cbind(bnt_1 - 1, bnt_2 - 1, chad_1 - 1, chad_2 - 1)),
+        expogrp = list(c(0,1), c(0,1), c(0)),
+        washout = list(),
+        sameexpopar = c(FALSE, FALSE, FALSE),
+        agegrp = dat_sccs_prep$calendar_grp,
+        data = dat_sccs_prep$data,
+        expo_of_interest = dat_sccs_prep$expo_interest,
+        expo_mod = dat_sccs_prep$expo_mod,
+        expo_dat = dat_sccs_prep$expo_dat,
+        expo_level = dat_sccs_prep$expo_level,
+        outcome_name = outcome_name,
+        model_type = "null_mod"
+      )
+      
+      # Because this is the result for the full model, rename the column accordingly
+      res_full <- res_full %>%
+        rename(lr_full = lr_null)
+      
+      ## Stage 4.2. Fit null model
+      
+      stage <- "fit_fePois_nullmod"
+      
+      res_null <- fit_sccs_3meth(
+        formula = event ~ bnt_1 + chad_1 + pre_bnt_1 + age,
+        indiv = id_num,
+        astart = obs_sta,
+        aend = obs_end,
+        aevent = diagnosis,
+        adrug = list(
+          cbind(bnt_1, bnt_2),
+          cbind(chad_1, chad_2),
+          cbind(pre_bnt_1, pre_bnt_2, pre_chad_1, pre_chad_2)),
+        aedrug = list(
+          cbind(bnt_1 + dat_sccs_prep$risk_null[["bnt_1"]],
+                bnt_2 + dat_sccs_prep$risk_null[["bnt_2"]]),
+          cbind(chad_1 + dat_sccs_prep$risk_null[["chad_1"]],
+                chad_2 + dat_sccs_prep$risk_null[["chad_2"]]),
+          cbind(bnt_1 - 1, bnt_2 - 1, chad_1 - 1, chad_2 - 1)),
+        expogrp = list(c(0,1), c(0,1), c(0)),
+        washout = list(),
+        sameexpopar = c(FALSE, FALSE, FALSE),
+        agegrp = dat_sccs_prep$calendar_grp,
+        data = dat_sccs_prep$data,
+        expo_of_interest = dat_sccs_prep$expo_interest,
+        expo_mod = dat_sccs_prep$expo_mod,
+        expo_dat = dat_sccs_prep$expo_dat,
+        expo_level = dat_sccs_prep$expo_level,
+        outcome_name = outcome_name,
+        model_type = "null_mod"
+      )
+      
+      ## Stage 5. Merge results and compute LR test
+      
+      stage <- "merge_full_null"
+      
+      res_full2 <- res_full %>% 
+        left_join(res_null, by = c("outcome", "exposure", "method")) %>%
+        mutate(lr_test = lr_full - lr_null, optimal_win = optimal_win) %>%
+        relocate(c(lr_null, lr_test), .after = lr_full) %>%
+        relocate(optimal_win, .after = exposure)
+
+      res_full2
+      
+    }, error = function(e) {
+      
+      ## Log error if occur ----
+      log_error(
+        sprintf(
+          "Stage: %s | Exposure: %s | Risk window: %d | Outcome: %s | Error: %s",
+          stage, expo, optimal_win, outcome_name, conditionMessage(e)
+        )
+      )
+      
+      ## ---- Placeholder result ----
+      data.frame(
+        outcome = outcome_name,
+        exposure = expo,
+        optimal_win = NA,
+        lr_full = NA, lr_null = NA, lr_test = NA,
+        method = NA
+      )
+    })
+  }
+}
+
+## 2.4. Function to get independent seeds for [10000] simulated datasets -------
+get_seeds <- function(n_sim = 10000){
+  set.seed(20251228, kind = "L'Ecuyer-CMRG", sample.kind = "Rejection")
+  n_seed <- n_sim # Independent seed for each run in each scenario
+  seed <- sample(1:1e9, 
+                 size = n_seed, 
+                 replace = FALSE)
+}
+
+## 2.4. Function to simulate [10000] datasets for each exposure - outcome of interest
+
+sim_null_dist_xu2013 <- function(seed_list,
+                                 n_sim,
+                                 data,
+                                 calendar_interval = 30,
+                                 pre_ex = 30,
+                                 max_risk_win = 70){
+  
+  # Make sure that the intervals for the calendar time adjustment are within the observation period
+  min_obs_sta <- min(data$obs_sta)
+  max_obs_end <- max(data$obs_end)
+  calendar <- seq(31, max_obs_end - (calendar_interval -1), by = calendar_interval)
+  calendar_adj2 <- calendar[calendar > min_obs_sta]
+  
+  null_dist <- foreach(i = 1:n_sim,
+                       .combine = rbind) %do% 
+    {
+      if (i == 1 || i %% 50 == 0) {
+        message(sprintf(
+          "[%s] Simulate data for replicate %d",
+          format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+          i))
+      }
+      
+      single_sim_4expo <- loop_4_exp_sim(
+        seed = seed_list[i],
+        data  = data,
+        pre_ex = pre_ex,
+        max_risk_win = max_risk_win,
+        expo_to_scan = c("bnt_1", "bnt_2", "chad_1", "chad_2"),
+        calendar_adjustment = calendar_adj2
+      )
+      
+      single_sim_4expo$rep <- i
+      single_sim_4expo$seed <- seed_list[i]
+      
+      single_sim_4expo
+      
+    }
+  return(null_dist)
+}
+  
+  
 
 
