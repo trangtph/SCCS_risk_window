@@ -8,7 +8,7 @@
 ###################################
 
 log_error <- function(msg,
-                      output_dir = here::here("Results")) {
+                      output_dir = here::here("Report")) {
   
   tryCatch({
     if (!dir.exists(output_dir)) {
