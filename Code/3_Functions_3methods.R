@@ -721,181 +721,7 @@ sim_null_data_xu2013 <- function(
   return(data)
 }
 
-## 2.3 Function to loop the process of simulating data and fit fePois model for 4 exposures ----
-
-loop_4_exp_sim <- function(
-    seed,
-    data,
-    pre_ex = 30,
-    max_risk_win = 70,
-    expo_to_scan = c("bnt_1", "bnt_2", "chad_1", "chad_2"),
-    calendar_adjustment
-) {
-  
-  foreach(expo = expo_to_scan, .combine = rbind) %do% {
-    
-    stage <- "xu2013_maxlr"
-    outcome_name <- NA_character_
-    optimal_win <- NA_real_
-
-    tryCatch({
-      
-      ## Stage 1: get the optimal risk window for the exposure ----
-      outcome_name <- tolower(unique(data$event_id))
-      
-      optimal_win <- xu2013_maxlr() %>%
-        filter(
-          exposure == expo,
-          outcome == outcome_name) %>%
-        pull(candidate_risk_win)
-      
-      if (length(optimal_win) == 0 || is.na(optimal_win)) {
-        log_error(
-          sprintf(
-            "Stage: xu2013_maxlr | Exposure: %s | Outcome: %s | No converged risk window",
-            expo, outcome_name))
-
-          data.frame(
-            outcome = outcome_name,
-            exposure = expo,
-            optimal_win = NA,
-            lr_full = NA_real_,
-            lr_null = NA_real_,
-            lr_test = NA_real_,
-            method = "fePois")
-      }
-      
-      ## Stage 2: simulate data under the null hypothesis for the respective exposure and outcome ----
-      
-      stage <- "sim_null_data_xu2013"
-      
-      sim_dat <- sim_null_data_xu2013(
-        seed = seed,
-        indiv = id_num,
-        astart = obs_sta,
-        aend = obs_end,
-        agegrp = calendar_adjustment,
-        data = data,
-        expo_of_interest = expo
-      )
-      
-      ## Stage 3: prepare the data ----
-      
-      stage <- "sccs_prep"
-
-      dat_sccs_prep <- sccs_prep(
-        data = sim_dat,
-        pre_ex = pre_ex,
-        max_risk_win = max_risk_win,
-        risk_scan = optimal_win,
-        expo_of_interest = expo,
-        calendar_adj = calendar_adjustment
-      )
-      
-      ## Stage 4: model fitting ----
-      stage <- "fit_fePois_full"
-      
-      res_full <- fit_sccs_3meth(
-        formula = event ~ bnt_1 + chad_1 + pre_bnt_1 + age,
-        indiv = id_num,
-        astart = obs_sta,
-        aend = obs_end,
-        aevent = diagnosis,
-        adrug = list(
-          cbind(bnt_1, bnt_2),
-          cbind(chad_1, chad_2),
-          cbind(pre_bnt_1, pre_bnt_2, pre_chad_1, pre_chad_2)),
-        aedrug = list(
-          cbind(bnt_1 + dat_sccs_prep$risk[["bnt_1"]],
-                bnt_2 + dat_sccs_prep$risk[["bnt_2"]]),
-          cbind(chad_1 + dat_sccs_prep$risk[["chad_1"]],
-                chad_2 + dat_sccs_prep$risk[["chad_2"]]),
-          cbind(bnt_1 - 1, bnt_2 - 1, chad_1 - 1, chad_2 - 1)),
-        expogrp = list(c(0,1), c(0,1), c(0)),
-        washout = list(),
-        sameexpopar = c(FALSE, FALSE, FALSE),
-        agegrp = dat_sccs_prep$calendar_grp,
-        data = dat_sccs_prep$data,
-        expo_of_interest = dat_sccs_prep$expo_interest,
-        expo_mod = dat_sccs_prep$expo_mod,
-        expo_dat = dat_sccs_prep$expo_dat,
-        expo_level = dat_sccs_prep$expo_level,
-        outcome_name = outcome_name,
-        model_type = "null_mod"
-      )
-      
-      # Because this is the result for the full model, rename the column accordingly
-      res_full <- res_full %>%
-        rename(lr_full = lr_null)
-      
-      ## Stage 4.2. Fit null model
-      
-      stage <- "fit_fePois_nullmod"
-      
-      res_null <- fit_sccs_3meth(
-        formula = event ~ bnt_1 + chad_1 + pre_bnt_1 + age,
-        indiv = id_num,
-        astart = obs_sta,
-        aend = obs_end,
-        aevent = diagnosis,
-        adrug = list(
-          cbind(bnt_1, bnt_2),
-          cbind(chad_1, chad_2),
-          cbind(pre_bnt_1, pre_bnt_2, pre_chad_1, pre_chad_2)),
-        aedrug = list(
-          cbind(bnt_1 + dat_sccs_prep$risk_null[["bnt_1"]],
-                bnt_2 + dat_sccs_prep$risk_null[["bnt_2"]]),
-          cbind(chad_1 + dat_sccs_prep$risk_null[["chad_1"]],
-                chad_2 + dat_sccs_prep$risk_null[["chad_2"]]),
-          cbind(bnt_1 - 1, bnt_2 - 1, chad_1 - 1, chad_2 - 1)),
-        expogrp = list(c(0,1), c(0,1), c(0)),
-        washout = list(),
-        sameexpopar = c(FALSE, FALSE, FALSE),
-        agegrp = dat_sccs_prep$calendar_grp,
-        data = dat_sccs_prep$data,
-        expo_of_interest = dat_sccs_prep$expo_interest,
-        expo_mod = dat_sccs_prep$expo_mod,
-        expo_dat = dat_sccs_prep$expo_dat,
-        expo_level = dat_sccs_prep$expo_level,
-        outcome_name = outcome_name,
-        model_type = "null_mod"
-      )
-      
-      ## Stage 5. Merge results and compute LR test
-      
-      stage <- "merge_full_null"
-      
-      res_full2 <- res_full %>% 
-        left_join(res_null, by = c("outcome", "exposure", "method")) %>%
-        mutate(lr_test = lr_full - lr_null, optimal_win = optimal_win) %>%
-        relocate(c(lr_null, lr_test), .after = lr_full) %>%
-        relocate(optimal_win, .after = exposure)
-
-      res_full2
-      
-    }, error = function(e) {
-      
-      ## Log error if occur ----
-      log_error(
-        sprintf(
-          "Stage: %s | Exposure: %s | Risk window: %d | Outcome: %s | Error: %s",
-          stage, expo, optimal_win, outcome_name, conditionMessage(e)
-        )
-      )
-      
-      ## ---- Placeholder result ----
-      data.frame(
-        outcome = outcome_name,
-        exposure = expo,
-        optimal_win = NA,
-        lr_full = NA, lr_null = NA, lr_test = NA,
-        method = NA
-      )
-    })
-  }
-}
-
-## 2.4. Function to get independent seeds for [10000] simulated datasets -------
+## 2.3. Function to get independent seeds for [10000] simulated datasets -------
 get_seeds <- function(n_sim = 10000){
   set.seed(20251228, kind = "L'Ecuyer-CMRG", sample.kind = "Rejection")
   n_seed <- n_sim # Independent seed for each run in each scenario
@@ -904,14 +730,218 @@ get_seeds <- function(n_sim = 10000){
                  replace = FALSE)
 }
 
-## 2.4. Function to simulate [10000] datasets for each exposure - outcome of interest
+## 2.4 Function to simulate the dataset and fit fePois model a large number of time ----
 
 sim_null_dist_xu2013 <- function(seed_list,
                                  n_sim,
                                  data,
-                                 calendar_interval = 30,
+                                 expo_of_interest,
+                                 calendar_adjustment,
                                  pre_ex = 30,
-                                 max_risk_win = 70){
+                                 max_risk_win = 70,
+                                 output_dir){
+  
+  outcome_name <- tolower(unique(data$event_id))
+  
+  # Ensure directories exist once
+  invisible(lapply(outcome_name, function(a) {
+    create_directory(file.path(output_dir, a))
+  }))
+  
+  file_path <- file.path(output_dir, outcome_name, paste0(expo_of_interest, ".csv"))
+  
+  stage <- "xu2013_maxlr"
+  optimal_win <- NA_real_
+  
+  ## Stage 1: get the optimal risk window for the exposure ----
+  
+  optimal_win <- xu2013_maxlr() %>%
+    filter(
+      exposure == expo_of_interest,
+      outcome == outcome_name) %>%
+    pull(candidate_risk_win)
+  
+  ## If there is no optimal_win, stop the procedure
+  
+  if (length(optimal_win) == 0 || is.na(optimal_win)) {
+    message(
+      sprintf(
+        "Stage: xu2013_maxlr | Exposure: %s | Outcome: %s | No converged risk window",
+        expo_of_interest, outcome_name))
+    
+    return(data.frame(
+      outcome = outcome_name,
+      exposure = expo_of_interest,
+      optimal_win = NA,
+      lr_full = NA_real_,
+      lr_null = NA_real_,
+      lr_test = NA_real_,
+      method = "fePois", rep = NA, seed = NA))
+  }
+  
+  
+  null_dist <- foreach(i = 1:n_sim,
+                       .combine = rbind) %do% 
+    {
+      if (i == 1 || i %% 20 == 0) {
+        message(sprintf(
+          "[%s] Replicate %d to %d out of %d",
+          format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+          i, i + 19, n_sim))
+      }
+      
+      tryCatch({
+        
+        ## Stage 2: simulate data under the null hypothesis for the respective exposure and outcome ----
+        
+        stage <- "sim_null_data_xu2013"
+        
+        sim_dat <- sim_null_data_xu2013(
+          seed = seed_list[i],
+          indiv = id_num,
+          astart = obs_sta,
+          aend = obs_end,
+          agegrp = calendar_adjustment,
+          data = data,
+          expo_of_interest = expo_of_interest
+        )
+        
+        ## Stage 3: prepare the data ----
+        
+        stage <- "sccs_prep"
+        
+        dat_sccs_prep <- sccs_prep(
+          data = sim_dat,
+          pre_ex = pre_ex,
+          max_risk_win = max_risk_win,
+          risk_scan = optimal_win,
+          expo_of_interest = expo_of_interest,
+          calendar_adj = calendar_adjustment
+        )
+        
+        ## Stage 4: model fitting ----
+        stage <- "fit_fePois_full"
+        
+        res_full <- fit_sccs_3meth(
+          formula = event ~ bnt_1 + chad_1 + pre_bnt_1 + age,
+          indiv = id_num,
+          astart = obs_sta,
+          aend = obs_end,
+          aevent = diagnosis,
+          adrug = list(
+            cbind(bnt_1, bnt_2),
+            cbind(chad_1, chad_2),
+            cbind(pre_bnt_1, pre_bnt_2, pre_chad_1, pre_chad_2)),
+          aedrug = list(
+            cbind(bnt_1 + dat_sccs_prep$risk[["bnt_1"]],
+                  bnt_2 + dat_sccs_prep$risk[["bnt_2"]]),
+            cbind(chad_1 + dat_sccs_prep$risk[["chad_1"]],
+                  chad_2 + dat_sccs_prep$risk[["chad_2"]]),
+            cbind(bnt_1 - 1, bnt_2 - 1, chad_1 - 1, chad_2 - 1)),
+          expogrp = list(c(0,1), c(0,1), c(0)),
+          washout = list(),
+          sameexpopar = c(FALSE, FALSE, FALSE),
+          agegrp = dat_sccs_prep$calendar_grp,
+          data = dat_sccs_prep$data,
+          expo_of_interest = dat_sccs_prep$expo_interest,
+          expo_mod = dat_sccs_prep$expo_mod,
+          expo_dat = dat_sccs_prep$expo_dat,
+          expo_level = dat_sccs_prep$expo_level,
+          outcome_name = outcome_name,
+          model_type = "null_mod"
+        )
+        
+        # Because this is the result for the full model, rename the column accordingly
+        res_full <- res_full %>%
+          rename(lr_full = lr_null)
+        
+        ## Stage 4.2. Fit null model
+        
+        stage <- "fit_fePois_nullmod"
+        
+        res_null <- fit_sccs_3meth(
+          formula = event ~ bnt_1 + chad_1 + pre_bnt_1 + age,
+          indiv = id_num,
+          astart = obs_sta,
+          aend = obs_end,
+          aevent = diagnosis,
+          adrug = list(
+            cbind(bnt_1, bnt_2),
+            cbind(chad_1, chad_2),
+            cbind(pre_bnt_1, pre_bnt_2, pre_chad_1, pre_chad_2)),
+          aedrug = list(
+            cbind(bnt_1 + dat_sccs_prep$risk_null[["bnt_1"]],
+                  bnt_2 + dat_sccs_prep$risk_null[["bnt_2"]]),
+            cbind(chad_1 + dat_sccs_prep$risk_null[["chad_1"]],
+                  chad_2 + dat_sccs_prep$risk_null[["chad_2"]]),
+            cbind(bnt_1 - 1, bnt_2 - 1, chad_1 - 1, chad_2 - 1)),
+          expogrp = list(c(0,1), c(0,1), c(0)),
+          washout = list(),
+          sameexpopar = c(FALSE, FALSE, FALSE),
+          agegrp = dat_sccs_prep$calendar_grp,
+          data = dat_sccs_prep$data,
+          expo_of_interest = dat_sccs_prep$expo_interest,
+          expo_mod = dat_sccs_prep$expo_mod,
+          expo_dat = dat_sccs_prep$expo_dat,
+          expo_level = dat_sccs_prep$expo_level,
+          outcome_name = outcome_name,
+          model_type = "null_mod"
+        )
+        
+        ## Stage 5. Merge results and compute LR test
+        
+        stage <- "merge_full_null"
+        
+        res_full2 <- res_full %>% 
+          left_join(res_null, by = c("outcome", "exposure", "method")) %>%
+          mutate(lr_test = lr_full - lr_null, optimal_win = optimal_win) %>%
+          relocate(c(lr_null, lr_test), .after = lr_full) %>%
+          relocate(optimal_win, .after = exposure)
+        
+        res_full2$rep <- i
+        res_full2$seed <- seed_list[i]
+        
+        append_to_csv(res_full2, file_path)
+        res_full2
+        
+      }, error = function(e) {
+        
+        ## Log error if occur ----
+        log_error(
+          sprintf(
+            "Stage: %s | Exposure: %s | Risk window: %d | Outcome: %s | Error: %s",
+            stage, expo_of_interest, optimal_win, outcome_name, conditionMessage(e)
+          )
+        )
+        
+        ## ---- Placeholder result ----
+        data.frame(
+          outcome = outcome_name,
+          exposure = expo_of_interest,
+          optimal_win = NA,
+          lr_full = NA, lr_null = NA, lr_test = NA,
+          method = NA, rep = i, seed = seed_list[i]
+        )
+      })
+      
+    }
+  return(null_dist)
+  
+}
+
+## 2.4. Function to loop the simulation through 4 exposures 
+
+loop_4_exp_sim <- function(
+    seed_list,
+    n_sim,
+    data,
+    expo_to_scan = c("bnt_1", "bnt_2", "chad_1", "chad_2"),
+    calendar_interval = 30,
+    pre_ex = 30,
+    max_risk_win = 70, 
+    output_dir = here("Report", "Null_dist")
+) {
+
   
   # Make sure that the intervals for the calendar time adjustment are within the observation period
   min_obs_sta <- min(data$obs_sta)
@@ -919,33 +949,30 @@ sim_null_dist_xu2013 <- function(seed_list,
   calendar <- seq(31, max_obs_end - (calendar_interval -1), by = calendar_interval)
   calendar_adj2 <- calendar[calendar > min_obs_sta]
   
-  null_dist <- foreach(i = 1:n_sim,
-                       .combine = rbind) %do% 
-    {
-      if (i == 1 || i %% 50 == 0) {
-        message(sprintf(
-          "[%s] Simulate data for replicate %d",
-          format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
-          i))
-      }
-      
-      single_sim_4expo <- loop_4_exp_sim(
-        seed = seed_list[i],
-        data  = data,
-        pre_ex = pre_ex,
-        max_risk_win = max_risk_win,
-        expo_to_scan = c("bnt_1", "bnt_2", "chad_1", "chad_2"),
-        calendar_adjustment = calendar_adj2
-      )
-      
-      single_sim_4expo$rep <- i
-      single_sim_4expo$seed <- seed_list[i]
-      
-      single_sim_4expo
-      
-    }
-  return(null_dist)
+  foreach(expo = expo_to_scan, .combine = rbind) %do% {
+    
+    message(paste(sprintf("[%s] Simulate data for exposure",
+                          format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
+                  expo))
+    
+    sim_null_dist_xu2013(
+      seed_list,
+      n_sim,
+      data,
+      expo_of_interest = expo,
+      calendar_adjustment = calendar_adj2,
+      pre_ex = 30,
+      max_risk_win = 70,
+      output_dir = output_dir
+    )
+    
+  }
+  
 }
+
+
+
+
   
   
 
