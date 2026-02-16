@@ -82,3 +82,63 @@ readr::write_csv(
   here("Report", "Raw_results", "Results_raw_3methods.csv")
 )
 
+## -----------------------------------------------------------------------------
+## Part 2: Obtain the optimal risk window by each method -----------------------
+## -----------------------------------------------------------------------------
+
+optimal_risk_win_3meth <- select_risk_win(data = results_raw_3meth,
+                                          summary_dir = here("Report", "Summary"),
+                                          plot_dir = here("Report", "Plot"),
+                                          summary_file_name = "Summary_all_scens")
+
+
+## -----------------------------------------------------------------------------
+## Part 3: p-value calculation (Xu_2013) ---------------------------------------
+## -----------------------------------------------------------------------------
+
+### Specify parameters ---------------------------------------------------------
+
+n_sim <- 1000
+calendar_interval <- 30
+exposure_scan <- c("bnt_1", "bnt_2", "chad_1", "chad_2")
+output_dir <- here("Report", "Null_dist")
+
+### Generate null distributions of the test statistic --------------------------
+
+# Warning: it could take one to two hour to simulate data for each outcome
+null_dist_myo <- loop_4_exp_sim(
+  seed_list = get_seeds(n_sim = n_sim),
+  n_sim = n_sim,
+  data = cdm_sccs$myo_sccs,
+  expo_to_scan = exposure_scan,
+  calendar_interval = calendar_interval,
+  result_table = results_raw_3meth,
+  output_dir = output_dir
+) 
+
+null_dist_pe <- loop_4_exp_sim(
+  seed_list = get_seeds(n_sim = n_sim),
+  n_sim = n_sim,
+  data = cdm_sccs$pe_sccs,
+  expo_to_scan = exposure_scan,
+  calendar_interval = calendar_interval,
+  result_table = results_raw_3meth,
+  output_dir = output_dir
+) 
+
+null_dist_thrc <- loop_4_exp_sim(
+  seed_list = get_seeds(n_sim = n_sim),
+  n_sim = n_sim,
+  data = cdm_sccs$thrc_sccs,
+  expo_to_scan = exposure_scan,
+  calendar_interval = calendar_interval,
+  result_table = results_raw_3meth,
+  output_dir = output_dir
+)
+
+### Calculate p-value for testing the null hypothesis --------------------------
+# that there does not exist an interval with elevated risk
+
+pval_xu2013 <- p_val_cal_xu2013()
+
+
