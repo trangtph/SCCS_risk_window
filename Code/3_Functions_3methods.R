@@ -40,7 +40,7 @@ sccs_prep <- function(data,
                       expo_of_interest, # The exposure we are scanning the risk window for,
                       pre_ex = 30, # Length of pre-exposure period
                       max_risk_win = 70, # The default risk window length for all exposures
-                      calendar_adj
+                      calendar_adj # the calendar time groups for calendar time adjustment
                        ) {
   
   # Assign correct risk window to each exposure
@@ -55,7 +55,7 @@ sccs_prep <- function(data,
   
   risk[expo_of_interest] <- risk["scan"]
   
-  # For null model for Xu_2013: set risk_scan = 0
+  # For the null model for Xu_2013: set risk_scan = 0
   
   risk_null <- c(
     bnt_1  = max_risk_win,
@@ -85,7 +85,7 @@ sccs_prep <- function(data,
       )
     )
   
-  # Obtain variable names for fitting model
+  # Obtain variable names for fitting model in the later steps
   vac_interest <- sub("_.*$", "", expo_of_interest)
   dose_interest <- sub("^.*_", "", expo_of_interest)
   expo_dat <- paste0(vac_interest, "_1")
@@ -107,6 +107,7 @@ sccs_prep <- function(data,
 
 ## 1. Function to fit standard SCCS and fixed-effect Poisson model -------------
 ## for one exposure - outcome pair and one risk window
+
 fit_sccs_3meth <- function(
     formula = event ~ bnt_1+ chad_1 + pre_bnt_1 + age, #The dependent variable should always be "event",
     indiv = id_num, 
@@ -133,7 +134,7 @@ fit_sccs_3meth <- function(
     outcome_name,
     model_type = "full_mod" # specify "null_mod" to fit a null model for Xu_2013
 ){
-  # 1. Data reshaping -----------------------------------------------------
+  # 1. Data reshaping (same as in function SCCS::standardsccs) -----------------
   yon <- deparse(substitute(adrug)) 
   yon1 <- as.formula(paste("z", "~", yon)) 
   adrugcolnames <- all.vars(yon1, functions = FALSE, unique = TRUE)[-1] # Get the names of all adrug columns
@@ -227,14 +228,14 @@ fit_sccs_3meth <- function(
   
   
   # 2. Only fit fePois model if model_type = null_mod --------------------------
-  # This is for the null model for Xu_2013
+  
+  # This is for the null model (to calculate the LR test statistic) for Xu_2013 
   
   if (model_type == "null_mod"){
     
     ## Make model formula
     fmla_null <- paste(formula, "+", "offset(log(interval))", "|", "indivL")
     fmla_null1 <- as.formula(paste("event~", fmla_null[3]))
-    
     
     ## Fit the null fixed-effect Poisson regression and extract log-likelihood
     
@@ -323,148 +324,182 @@ fit_sccs_3meth <- function(
 }
 
 
-## 2. Function to loop `fit_sccs_3meth` through 4 exposures --------------------
+## 2. Function to loop `fit_sccs_3meth` through a series of candidate risk windows for one exposure -----
 
-loop_4_exp <- function(
+loop_risk_win <- function(
     data,
-    risk_scan,
+    risk_win,
     pre_ex = 30,
     max_risk_win = 70,
-    expo_to_scan = c("bnt_1", "bnt_2", "chad_1", "chad_2"),
-    calendar_adjustment
-) {
+    expo,
+    calendar_adjustment, 
+    output_dir
+){
   
-  foreach(expo = expo_to_scan, .combine = rbind) %do% {
-    
-    stage <- "sccs_prep"
-    outcome_name <- NA_character_
-    
-    tryCatch({
+  outcome_name <- tolower(unique(data$event_id))
+  
+  
+  # Create the directory to store the results
+  invisible(lapply(outcome_name, function(a) {
+    create_directory(file.path(output_dir, a))
+  }))
+  
+  file_path <- file.path(output_dir, outcome_name, paste0(expo, ".csv"))
+  
+  # Loop through all candidate risk windows
+  loop_risk_win_res <- foreach(k = seq_along(risk_win),
+                               .combine = rbind) %do% 
+    { 
+      i <- risk_win[k]
       
-      ## Stage 1: preparation ----
-    
-    dat_sccs_prep <- sccs_prep(
-      data = data,
-      pre_ex = pre_ex,
-      max_risk_win = max_risk_win,
-      risk_scan = risk_scan,
-      expo_of_interest = expo,
-      calendar_adj = calendar_adjustment
-    )
-    
-    outcome_name <- tolower(unique(dat_sccs_prep$data$event_id))
-    
-    ## Stage 2: model fitting ----
-    stage <- "fit_sccs_3meth_fullmod"
-    
-    res_full <- fit_sccs_3meth(
-      formula = event ~ bnt_1 + chad_1 + pre_bnt_1 + age,
-      indiv = id_num,
-      astart = obs_sta,
-      aend = obs_end,
-      aevent = diagnosis,
-      adrug = list(
-        cbind(bnt_1, bnt_2),
-        cbind(chad_1, chad_2),
-        cbind(pre_bnt_1, pre_bnt_2, pre_chad_1, pre_chad_2)),
-      aedrug = list(
-        cbind(bnt_1 + dat_sccs_prep$risk[["bnt_1"]],
-              bnt_2 + dat_sccs_prep$risk[["bnt_2"]]),
-        cbind(chad_1 + dat_sccs_prep$risk[["chad_1"]],
-              chad_2 + dat_sccs_prep$risk[["chad_2"]]),
-        cbind(bnt_1 - 1, bnt_2 - 1, chad_1 - 1, chad_2 - 1)),
-      expogrp = list(c(0,1), c(0,1), c(0)),
-      washout = list(),
-      sameexpopar = c(FALSE, FALSE, FALSE),
-      agegrp = dat_sccs_prep$calendar_grp,
-      data = dat_sccs_prep$data,
-      expo_of_interest = dat_sccs_prep$expo_interest,
-      expo_mod = dat_sccs_prep$expo_mod,
-      expo_dat = dat_sccs_prep$expo_dat,
-      expo_level = dat_sccs_prep$expo_level,
-      outcome_name = outcome_name
-    )
-    
-    ## Stage 2.2. Fit null model for Xu_2013
-    
-    stage <- "fit_sccs_3meth_nullmod"
-    
-    res_null <- fit_sccs_3meth(
-      formula = event ~ bnt_1 + chad_1 + pre_bnt_1 + age,
-      indiv = id_num,
-      astart = obs_sta,
-      aend = obs_end,
-      aevent = diagnosis,
-      adrug = list(
-        cbind(bnt_1, bnt_2),
-        cbind(chad_1, chad_2),
-        cbind(pre_bnt_1, pre_bnt_2, pre_chad_1, pre_chad_2)),
-      aedrug = list(
-        cbind(bnt_1 + dat_sccs_prep$risk_null[["bnt_1"]],
-              bnt_2 + dat_sccs_prep$risk_null[["bnt_2"]]),
-        cbind(chad_1 + dat_sccs_prep$risk_null[["chad_1"]],
-              chad_2 + dat_sccs_prep$risk_null[["chad_2"]]),
-        cbind(bnt_1 - 1, bnt_2 - 1, chad_1 - 1, chad_2 - 1)),
-      expogrp = list(c(0,1), c(0,1), c(0)),
-      washout = list(),
-      sameexpopar = c(FALSE, FALSE, FALSE),
-      agegrp = dat_sccs_prep$calendar_grp,
-      data = dat_sccs_prep$data,
-      expo_of_interest = dat_sccs_prep$expo_interest,
-      expo_mod = dat_sccs_prep$expo_mod,
-      expo_dat = dat_sccs_prep$expo_dat,
-      expo_level = dat_sccs_prep$expo_level,
-      outcome_name = outcome_name,
-      model_type = "null_mod"
-    )
-    
-    ## Stage 3. Merge results and compute LR test
-    
-    stage <- "merge_full_null"
-    
-    res_full2 <- res_full %>% 
-      left_join(res_null, by = c("outcome", "exposure", "method")) %>%
-      mutate(lr_test = lr_full - lr_null) %>%
-      relocate(c(lr_null, lr_test), .after = lr_full)
-    
-    res_full2
-    
-    }, error = function(e) {
+      message(sprintf(
+        "Scanning risk window: %d days (%s)",
+        i, Sys.time()
+      ))
       
-      ## Log error if occur ----
-      log_error(
-        sprintf(
-          "Stage: %s | Exposure: %s | Risk window: %d | Outcome: %s | Error: %s",
-          stage, expo, risk_scan, outcome_name, conditionMessage(e)
+      stage <- "sccs_prep"
+      outcome_name <- NA_character_
+      
+      tryCatch({
+        
+        ## Stage 1: data preparation ----
+        
+        dat_sccs_prep <- sccs_prep(
+          data = data,
+          pre_ex = pre_ex,
+          max_risk_win = max_risk_win,
+          risk_scan = i,
+          expo_of_interest = expo,
+          calendar_adj = calendar_adjustment
         )
-      )
-      
-      ## ---- Placeholder result ----
-      data.frame(
-        outcome = outcome_name,
-        exposure = expo,
-        T_L = NA, T_L1 = NA,
-        est_L = NA, IRR_L = NA,
-        se_L = NA, p_val = NA,
-        IRR_L_low_CI = NA, IRR_L_up_CI = NA,
-        lr_full = NA, lr_null = NA, lr_test = NA,
-        method = NA,
-        converge = FALSE
-      )
-    })
-  }
+        
+        outcome_name <- tolower(unique(dat_sccs_prep$data$event_id))
+        
+        ## Stage 2: model fitting ----
+        
+        ## 2.1.  Fit the standard SCCS model for Xu_2011 and Campos, and the full fePois model for Xu_2013
+        stage <- "fit_sccs_3meth_fullmod"
+        
+        res_full <- fit_sccs_3meth(
+          formula = event ~ bnt_1 + chad_1 + pre_bnt_1 + age,
+          indiv = id_num,
+          astart = obs_sta,
+          aend = obs_end,
+          aevent = diagnosis,
+          adrug = list(
+            cbind(bnt_1, bnt_2),
+            cbind(chad_1, chad_2),
+            cbind(pre_bnt_1, pre_bnt_2, pre_chad_1, pre_chad_2)),
+          aedrug = list(
+            cbind(bnt_1 + dat_sccs_prep$risk[["bnt_1"]],
+                  bnt_2 + dat_sccs_prep$risk[["bnt_2"]]),
+            cbind(chad_1 + dat_sccs_prep$risk[["chad_1"]],
+                  chad_2 + dat_sccs_prep$risk[["chad_2"]]),
+            cbind(bnt_1 - 1, bnt_2 - 1, chad_1 - 1, chad_2 - 1)),
+          expogrp = list(c(0,1), c(0,1), c(0)),
+          washout = list(),
+          sameexpopar = c(FALSE, FALSE, FALSE),
+          agegrp = dat_sccs_prep$calendar_grp,
+          data = dat_sccs_prep$data,
+          expo_of_interest = dat_sccs_prep$expo_interest,
+          expo_mod = dat_sccs_prep$expo_mod,
+          expo_dat = dat_sccs_prep$expo_dat,
+          expo_level = dat_sccs_prep$expo_level,
+          outcome_name = outcome_name
+        )
+        
+        ## Stage 2.2. Fit null model for Xu_2013
+        
+        stage <- "fit_sccs_3meth_nullmod"
+        
+        res_null <- fit_sccs_3meth(
+          formula = event ~ bnt_1 + chad_1 + pre_bnt_1 + age,
+          indiv = id_num,
+          astart = obs_sta,
+          aend = obs_end,
+          aevent = diagnosis,
+          adrug = list(
+            cbind(bnt_1, bnt_2),
+            cbind(chad_1, chad_2),
+            cbind(pre_bnt_1, pre_bnt_2, pre_chad_1, pre_chad_2)),
+          aedrug = list(
+            cbind(bnt_1 + dat_sccs_prep$risk_null[["bnt_1"]],
+                  bnt_2 + dat_sccs_prep$risk_null[["bnt_2"]]),
+            cbind(chad_1 + dat_sccs_prep$risk_null[["chad_1"]],
+                  chad_2 + dat_sccs_prep$risk_null[["chad_2"]]),
+            cbind(bnt_1 - 1, bnt_2 - 1, chad_1 - 1, chad_2 - 1)),
+          expogrp = list(c(0,1), c(0,1), c(0)),
+          washout = list(),
+          sameexpopar = c(FALSE, FALSE, FALSE),
+          agegrp = dat_sccs_prep$calendar_grp,
+          data = dat_sccs_prep$data,
+          expo_of_interest = dat_sccs_prep$expo_interest,
+          expo_mod = dat_sccs_prep$expo_mod,
+          expo_dat = dat_sccs_prep$expo_dat,
+          expo_level = dat_sccs_prep$expo_level,
+          outcome_name = outcome_name,
+          model_type = "null_mod"
+        )
+        
+        ## Stage 3. Merge results and compute LR test
+        
+        stage <- "merge_full_null"
+        
+        res_full2 <- res_full %>% 
+          left_join(res_null, by = c("outcome", "exposure", "method")) %>%
+          mutate(lr_test = lr_full - lr_null) %>%
+          relocate(c(lr_null, lr_test), .after = lr_full)
+
+        res_full2$candidate_risk_win <- i
+        res_full2$max_risk_win <- max_risk_win
+        res_full2$calendar_grp <- paste(calendar_adjustment, collapse = " ")
+        
+        # Render the results to a .csv file
+        append_to_csv(res_full2, file_path)
+        
+        res_full2
+        
+      }, error = function(e) {
+        
+        ## Log error if occur ----
+        log_error(
+          sprintf(
+            "Stage: %s | Exposure: %s | Risk window: %d | Outcome: %s | Error: %s",
+            stage, expo, i, outcome_name, conditionMessage(e)
+          )
+        )
+        
+        ## ---- Placeholder result ----
+        data.frame(
+          outcome = outcome_name,
+          exposure = expo,
+          T_L = NA, T_L1 = NA,
+          est_L = NA, IRR_L = NA,
+          se_L = NA, p_val = NA,
+          IRR_L_low_CI = NA, IRR_L_up_CI = NA,
+          lr_full = NA, lr_null = NA, lr_test = NA,
+          method = NA,
+          converge = FALSE, 
+          candidate_risk_win = NA,
+          max_risk_win = max_risk_win, 
+          calendar_grp = paste(calendar_adjustment, collapse = " ")
+        )
+      })
+    }
 }
 
   
-## 3. Function to apply `loop_4_exp` through a series of risk windows in a dataset ----
+## 3. Function to apply `loop_risk_win` through all exposures in a dataset -----
 
-loop_risk_win <- function(risk_win = seq(1, 70, by = 1), 
-                          data,
-                          pre_ex = 30,
-                          calendar_interval = 30,
-                          max_risk_win = 70
-                          ){
-  
+loop_4_exp <- function(
+    data,
+    risk_win = seq(1, 70, by = 1),
+    pre_ex = 30,
+    max_risk_win = 70,
+    expo_to_scan = c("bnt_1", "bnt_2", "chad_1", "chad_2"),
+    calendar_interval = 30,
+    output_dir = here("Report", "Raw_results")
+) {
   
   # Make sure that the intervals for the calendar time adjustment are within the observation period
   min_obs_sta <- min(data$obs_sta)
@@ -472,27 +507,24 @@ loop_risk_win <- function(risk_win = seq(1, 70, by = 1),
   calendar <- seq(31, max_obs_end - (calendar_interval -1), by = calendar_interval)
   calendar_adj2 <- calendar[calendar > min_obs_sta]
   
-  # Loop through all candidate risk windows
-  loop_risk_win_res <- foreach(k = seq_along(risk_win),
-                               .combine = rbind) %do% 
-    { 
-      i <- risk_win[k]
-      message(sprintf(
-        "Scanning risk window: %d days (%s)",
-        i, Sys.time()
-      ))
-      
-      res_1_risk_win <- loop_4_exp(risk_scan = i, 
-                                   data = data,
-                                   pre_ex = pre_ex,
-                                   max_risk_win = max_risk_win,
-                                   calendar_adjustment = calendar_adj2)
-      res_1_risk_win$candidate_risk_win <- i
-      res_1_risk_win$max_risk_win <- max_risk_win
-      res_1_risk_win$calendar_grp <- paste(calendar_adj2, collapse = " ")
-      res_1_risk_win
-      }
+  # Loop through all exposures
+  
+  foreach(expo = expo_to_scan, .combine = rbind) %do% {
+    
+    message(paste("Scanning for exposure:", expo, "-----------------------------"))
+    
+    res_1_expo <- loop_risk_win(data = data,
+                                risk_win = risk_win,
+                                pre_ex = pre_ex,
+                                max_risk_win = max_risk_win,
+                                expo = expo,
+                                calendar_adjustment = calendar_adj2, 
+                                output_dir = output_dir)
+    res_1_expo
+  }
+  
 }
+  
 
 ################################################################################
 # Part 2: Specific functions for Xu_2013 ---------------------------------------
@@ -739,11 +771,12 @@ sim_null_dist_xu2013 <- function(seed_list,
                                  calendar_adjustment,
                                  pre_ex = 30,
                                  max_risk_win = 70,
+                                 result_table,
                                  output_dir){
   
   outcome_name <- tolower(unique(data$event_id))
   
-  # Ensure directories exist once
+  # Create the directory to store the results
   invisible(lapply(outcome_name, function(a) {
     create_directory(file.path(output_dir, a))
   }))
@@ -755,7 +788,7 @@ sim_null_dist_xu2013 <- function(seed_list,
   
   ## Stage 1: get the optimal risk window for the exposure ----
   
-  optimal_win <- xu2013_maxlr() %>%
+  optimal_win <- xu2013_maxlr(result_table = result_table) %>%
     filter(
       exposure == expo_of_interest,
       outcome == outcome_name) %>%
@@ -888,7 +921,7 @@ sim_null_dist_xu2013 <- function(seed_list,
           model_type = "null_mod"
         )
         
-        ## Stage 5. Merge results and compute LR test
+        ## Stage 5. Merge results and compute LR test statistic
         
         stage <- "merge_full_null"
         
@@ -901,6 +934,7 @@ sim_null_dist_xu2013 <- function(seed_list,
         res_full2$rep <- i
         res_full2$seed <- seed_list[i]
         
+        # Export each simulated LR test stat to the .csv file
         append_to_csv(res_full2, file_path)
         res_full2
         
@@ -929,7 +963,7 @@ sim_null_dist_xu2013 <- function(seed_list,
   
 }
 
-## 2.4. Function to loop the simulation through 4 exposures 
+## 2.5. Function to loop the simulation through 4 exposures ----
 
 loop_4_exp_sim <- function(
     seed_list,
@@ -939,6 +973,7 @@ loop_4_exp_sim <- function(
     calendar_interval = 30,
     pre_ex = 30,
     max_risk_win = 70, 
+    result_table, 
     output_dir = here("Report", "Null_dist")
 ) {
 
@@ -963,15 +998,476 @@ loop_4_exp_sim <- function(
       calendar_adjustment = calendar_adj2,
       pre_ex = 30,
       max_risk_win = 70,
-      output_dir = output_dir
+      output_dir = output_dir,
+      result_table = result_table
     )
     
   }
   
 }
 
+## 2.6. Function to calculate the p-value to testing the null hypothesis 
+## that there does not exist an interval with elevated risk
+
+# For each exposure-outcome pair, this function extract the observed LR test stat, 
+# load the respective simulated null distribution of the LR test, 
+# calculate p-value and export the result to a .csv file
+
+p_val_cal_xu2013 <- function(
+    maxlr = xu2013_maxlr(result_table = results_raw_3meth),
+    results_dir = here("Report", "Null_dist"),
+    summary_dir = here("Report", "Summary"),
+    p_val_file_name = "pval_Xu2013"
+) {
+  
+  all_pval <- foreach(i = seq_len(nrow(maxlr)), .combine = rbind) %do% {
+    
+    outcome_i <- maxlr$outcome[i]
+    expo_i    <- maxlr$exposure[i]
+    lrt_obs_i <- maxlr$lr_test[i]
+    
+    sim_file <- paste0(expo_i, ".csv")
+    file_path <- file.path(results_dir, outcome_i, sim_file)
+    
+    if (!file.exists(file_path)) {
+      warning("File not found: ", file_path)
+      return(NULL)
+    }
+    
+    lrt_null <- tryCatch(
+      read.csv(file_path),
+      error = function(e) {
+        warning(
+          sprintf(
+            "Failed to read null file | outcome=%s | exposure=%s | %s",
+            outcome_i, expo_i, e$message
+          ))
+        return(NULL)
+      })
+    
+    if (is.null(lrt_null) || nrow(lrt_null) == 0) {
+      return(NULL)
+    }
+    
+    pval_i <- tryCatch({
+      B <- nrow(lrt_null)
+      (1 + sum(lrt_null$lr_test_sim >= lrt_obs_i)) / (1 + B)
+    }, error = function(e) {
+      warning(
+        sprintf(
+          "Error calculating p-value | outcome=%s | exposure=%s | %s",
+          outcome_i, expo_i, e$message
+        ))
+      return(NULL)
+    })
+    
+    if (is.null(pval_i)) {
+      return(NULL)
+    }
+    
+    data.frame(
+      outcome  = outcome_i,
+      exposure = expo_i,
+      p_value  = pval_i
+    )
+  }
+  
+  output_path <- file.path(
+    summary_dir,
+    paste0(p_val_file_name, ".csv")
+  )
+  
+  readr::write_csv(all_pval, output_path)
+  
+  all_pval
+}
 
 
+################################################################################
+# Part 3: Functions to select the optimal window per method --------------------
+################################################################################
+
+## 3.1. Function to select the optimal window for Xu_2011 (per exposure-outcome pair) ----
+# This function automatically selects window with max IRR and produce the plot of IRR_L vs 1/T(L)
+# It is necessary to check if the plot shows an approximate linear relationship 
+# between IRRL and 1/T(L) when L>LM
+
+Xu_2011_plot <- function(data,
+                         x = "T_L1",
+                         y = "IRR_L",
+                         xlab = "1/ T(L)",
+                         ylab = "R (L)", 
+                         xbreak = 20,
+                         plot_dir = file.path(here("Report"), "Plot")
+                         ) {
+  
+  ## Early exit if data is empty
+  if (is.null(data) || nrow(data) == 0) {
+    return(
+      tibble::tibble(
+        outcome = character(),
+        exposure = character(),
+        est_L = numeric(),
+        se_L = numeric(),
+        IRR_L = numeric(),
+        IRR_L_low_CI = numeric(),
+        IRR_L_up_CI = numeric(),
+        p_val = numeric(),
+        lr_test = numeric(),
+        optimal_window_days = numeric(),
+        method = character(),
+        error = character()
+        
+      )
+    )
+  }
+  
+  
+  create_directory(plot_dir)
+  
+  # Only select candidate risk windows with converged SCCS model
+  data2 <- data %>% 
+    filter(method == "stdSCCS",
+           converge == TRUE)
+  
+  if (nrow(data2) < 2) {
+    return(
+      tibble::tibble(
+        outcome = character(),
+        exposure = character(),
+        est_L = numeric(),
+        se_L = numeric(),
+        IRR_L = numeric(),
+        IRR_L_low_CI = numeric(),
+        IRR_L_up_CI = numeric(),
+        p_val = numeric(),
+        lr_test = numeric(),
+        optimal_window_days = numeric(),
+        method = character(),
+        error = "insufficient data"
+      )
+    )
+  }
+  
+  # row with maximum IRR
+  max_row <- data2 %>% 
+    slice_max(.data[[y]], n = 1, with_ties = FALSE)
+  
+  # Make plot of IRR_L versus 1/T(L) (average time at risk)
+  
+  plot_name <- paste0("Xu2011_", max_row$outcome, "_", max_row$exposure, ".png")
+  
+  png(file.path(plot_dir, plot_name), 
+      width = 20, height = 12, units = "cm", res = 300)
+  
+  plot_irr <- ggplot(data2, aes(x = .data[[x]], y = .data[[y]])) +
+    geom_line() +
+    geom_point() +
+    geom_point(
+      data = max_row,
+      size = 2,
+      colour = "darkred"
+    ) +
+    scale_x_continuous(
+      name = xlab,
+      breaks = scales::breaks_pretty(n = xbreak),
+      expand = expansion(mult = c(0.05, 0.05))
+    ) +
+    scale_y_continuous(
+      name = ylab,
+      expand = expansion(mult = c(0.05, 0.05))
+    ) +
+    labs(subtitle = paste0("Max IRR = ", round(max_row$IRR_L, 2),  " at L = ", max_row$candidate_risk_win, " days")) + 
+    theme_minimal()
+  
+  print(plot_irr)
+  dev.off()
+  
+  res_xu2011 <- max_row %>%
+    select(outcome, exposure, est_L, se_L, IRR_L, IRR_L_low_CI, IRR_L_up_CI, p_val) 
+  
+  res_xu2011 <- res_xu2011 %>%
+    mutate(lr_test = NA,
+      optimal_window_days = max_row$candidate_risk_win,
+      method = "Xu_2011",
+      error = NA_character_)
+  
+  return(res_xu2011)
+}
+
+## 3.2. Function to select the optimal window for Campos (per exposure-outcome pair) -----
+
+# This Function makes a scatterplot/line plot of the estimated IRR and the 
+# (inverse of) a sequence of risk period lengths, and fit a sequence of linear-quadratic 
+# spline models for different knot points through the scatter plot
+ 
+Campos_plot <- function(data, 
+                        risk_win = "candidate_risk_win",# variable 'risk length' in the data
+                        T_L_inv = "T_L1", # variable '1/risk length' in the data
+                        IRR_L = "IRR_L",   # variable 'estimated IRR' in the data
+                        xbreak = 20, # number of breaks for the x axis plot
+                        plot_dir = file.path(here("Report"), "Plot")
+){
+  ## Early exit if data is empty
+  if (is.null(data) || nrow(data) == 0) {
+    return(
+      tibble::tibble(
+        outcome = character(),
+        exposure = character(),
+        est_L = numeric(),
+        se_L = numeric(),
+        IRR_L = numeric(),
+        IRR_L_low_CI = numeric(),
+        IRR_L_up_CI = numeric(),
+        p_val = numeric(),
+        lr_test = numeric(),
+        optimal_window_days = numeric(),
+        method = character(),
+        error = character()
+      )
+    )
+  }
+  
+  create_directory(plot_dir)
+  
+  # Only select candidate risk windows with converged SCCS model
+  data <- data %>% 
+    filter(method == "stdSCCS",
+           converge == TRUE)
+  
+  if (nrow(data) < 3) { # avoid unstable spline fit
+    return(
+      tibble::tibble(
+        outcome = data$outcome[1],
+        exposure = data$exposure[1],
+        est_L = NA_real_,
+        se_L = NA_real_,
+        IRR_L = NA_real_,
+        IRR_L_low_CI = NA_real_,
+        IRR_L_up_CI = NA_real_,
+        p_val = NA_real_,
+        lr_test = NA_real_,
+        optimal_window_days = NA_real_,
+        method = "Campos",
+        error = "insufficient data"
+      )
+    )
+  }
+  
+  # 1. Define range of candidate knots
+  # Convert to the inverse scale (1/t) for the x-axis variable
+  candidate_risk_win <- data[[risk_win]]
+  knot_candidates_inv <- data[[T_L_inv]] #only use knots as the candidate risk windows in the SCCS
+  
+  # Get data for fitting splines
+  x <- data[[T_L_inv]]
+  y <- data[[IRR_L]]
+  
+  # 2. Fit linear-quadratic splines across candidate knots and extract sum of square error
+  ## Define function  
+  calc_sse <- function(knot_inv){ #knot_inv = 1/risk length
+    
+    # Term for the change in slope after the knot:
+    lp  <- pmax(0, x - knot_inv) # = 0 before the knot
+    # Term for the curvature after the knot
+    lp2 <- lp^2
+    # Fit linear-quadratic spline
+    lqs <- lm(y ~ x + lp + lp2) 
+    # Calculate SSE
+    sum(resid(lqs)^2)
+  }
+  ## Apply function
+  sse_values <- sapply(knot_candidates_inv, calc_sse)
+  
+  # 3. Find the knot (in inverse scale) that minimizes SSE
+  best_knot_inv <- knot_candidates_inv[which.min(sse_values)]
+  
+  
+  # 4. Fit final spline using the best knot
+  lp  <- pmax(0, x - best_knot_inv)
+  lp2 <- lp^2
+  
+  final_model <- lm(y ~ x + lp + lp2)
+  
+  # 5. Generate prediction grid for plotting
+  x_grid <- seq(min(x), max(x), length.out = 200)
+  
+  grid_df <- data.frame(
+    x   = x_grid,
+    lp  = pmax(0, x_grid - best_knot_inv),
+    lp2 = pmax(0, x_grid - best_knot_inv)^2
+  )
+  
+  grid_df$pred_y <- predict(final_model, newdata = grid_df)
+  
+  # 6. Visualise the results
+  optimal_point <- data[data[[T_L_inv]] == best_knot_inv, ]
+  
+  plot_name <- paste0("Campos_", optimal_point$outcome, "_", optimal_point$exposure, ".png")
+  
+  png(file.path(plot_dir, plot_name), 
+      width = 20, height = 12, units = "cm", res = 300)
+  
+  p <- ggplot(data, aes(x = .data[[T_L_inv]], y = .data[[IRR_L]])) +
+    geom_point(alpha = 0.8, color = "black") +
+    geom_line(data = grid_df, aes(x = x, y = pred_y), linewidth = 1) +
+    geom_point(data = optimal_point, 
+               aes(x = .data[[T_L_inv]], .data[[IRR_L]]),
+               color = "darkred", 
+               size = 3) + 
+    labs(title = "Optimal Quadratic Spline Fit (Campos 2017)",
+         subtitle = paste("Optimal knot at", optimal_point$candidate_risk_win, "days"), 
+         y = "IRR (L)") +
+    scale_x_continuous(
+      name = "Inverse Risk Length (1/T(L))",
+      breaks = scales::breaks_pretty(n = xbreak)
+    ) +
+    theme_minimal()
+  
+  print(p)
+  dev.off()
+  
+  # Export the result of the optimal window
+  res_campos <- optimal_point %>%
+    select(outcome, exposure, est_L, se_L, IRR_L, IRR_L_low_CI, IRR_L_up_CI, p_val, lr_test) 
+  
+  res_campos <- res_campos %>%
+    mutate(
+           optimal_window_days = optimal_point$candidate_risk_win,
+           method = "Campos",
+           error = NA_character_)
+  
+  return(res_campos)
+}
+
+## No function to select the optimal window for Xu_2013 because we just need to select the one with max LR test stat
+## (will perform it directly in the loop)
+    
+## 3.3 Function to apply the selection of optimal window by all methods and for all exposure-outcome pairs ----
+
+# This function will return the optimal risk windows selected by three methods for each exposure-outcome pair, 
+# and export to a .csv file
+
+select_risk_win <- function(data, # the table with results from all SCCS models with all candidate windows
+                            summary_dir = here("Report", "Summary"),
+                            plot_dir = here("Report", "Plot"),
+                            summary_file_name = "Summary_all_scens") {
+  
+  create_directory(summary_dir)
+  
+  ## Split data
+  data_split <- data %>%
+    dplyr::group_by(outcome, exposure) %>%
+    dplyr::group_split()
+  
+  all_res <- purrr::map_dfr(data_split, function(data2) {
+    
+    outcome_i  <- data2$outcome[1]
+    exposure_i <- data2$exposure[1]
+    
+    ## Xu 2011 ----
+    res_xu2011 <- tryCatch(
+      Xu_2011_plot(data = data2, plot_dir = plot_dir),
+      error = function(e) {
+        log_error(
+          sprintf(
+            "Xu_2011 failed | outcome=%s | exposure=%s | %s",
+            outcome_i, exposure_i, conditionMessage(e))
+        )
+        NULL
+      })
+    
+    ## Campos ----
+    res_campos <- tryCatch(
+      Campos_plot(data = data2, plot_dir = plot_dir),
+      error = function(e) {
+        log_error(
+          sprintf(
+            "Campos failed | outcome=%s | exposure=%s | %s",
+            outcome_i, exposure_i, conditionMessage(e)
+          ))
+        NULL
+      })
+    
+    ## Xu 2013 ----
+    res_xu2013 <- tryCatch({
+      
+      base <- data2 %>%
+        dplyr::filter(method == "fePois", converge == TRUE)
+      
+      if (nrow(base) == 0) {
+        log_error(
+          sprintf(
+            "Xu_2013 skipped (no valid rows) | outcome=%s | exposure=%s",
+            outcome_i, exposure_i
+          ))
+        return(NULL)
+      }
+      
+      if (nrow(base) < 2) {
+        return(
+          tibble::tibble(
+            outcome = data$outcome[1],
+            exposure = data$exposure[1],
+            est_L = NA_real_,
+            se_L = NA_real_,
+            IRR_L = NA_real_,
+            IRR_L_low_CI = NA_real_,
+            IRR_L_up_CI = NA_real_,
+            p_val = NA_real_,
+            lr_test = NA_real_,
+            optimal_window_days = NA_real_,
+            method = "Xu_2013",
+            error = "insufficient data"
+          )
+        )
+      }
+      
+      best_lr <- max(base$lr_test, na.rm = TRUE)
+      
+      base %>%
+        dplyr::filter(lr_test == best_lr) %>%
+        dplyr::select(
+          outcome, exposure,
+          est_L, se_L,
+          IRR_L, IRR_L_low_CI, IRR_L_up_CI,
+          p_val, lr_test, candidate_risk_win
+        ) %>%
+        dplyr::rename(optimal_window_days = candidate_risk_win) %>%
+        dplyr::mutate(method = "Xu_2013",
+                      error = NA_character_)
+      
+    }, error = function(e) {
+      log_error(
+        sprintf(
+          "Xu_2013 failed | outcome=%s | exposure=%s | %s",
+          outcome_i, exposure_i, conditionMessage(e)
+        ))
+      NULL
+    })
+    
+    ## Bind results
+    dplyr::bind_rows(
+      res_xu2011,
+      res_campos,
+      res_xu2013
+    )
+  })
+  
+  ## Export summary
+  output_path <- file.path(
+    summary_dir,
+    paste0(summary_file_name, ".csv")
+  )
+  
+  readr::write_csv(all_res, output_path)
+  
+  all_res
+}
+
+
+
+  
 
   
   
