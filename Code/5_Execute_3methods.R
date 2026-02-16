@@ -14,10 +14,6 @@
 
 
 ### Load functions and packages
-
-source(here("Code", "3_Functions_3methods.R"))
-source(here("Code", "0_Helper_functions.R"))
-
 library(dplyr)
 library(SCCS)
 library(survival)
@@ -25,6 +21,11 @@ library(fixest)
 library(here)
 library(rio)
 library(foreach)
+library(ggplot2)
+library(readr)
+
+source(here("Code", "3_Functions_3methods.R"))
+source(here("Code", "0_Helper_functions.R"))
 
 
 ### Load data -------------------------------------------------------------------
@@ -67,14 +68,17 @@ results_raw_3meth <- foreach(dat = dataset,
     
     data <- cdm_sccs[[dat]]
     
-    loop_risk_win(risk_win = risk_win,
-                  data = data,
-                  calendar_interval = calendar_interval
+    loop_4_exp(
+      data = data,
+      risk_win = risk_win,
+      calendar_interval = 30,
+      output_dir = here("Report", "Raw_results")
     )
     
   }
 
-### Export the results ---------------------------------------------------------
-
-write.csv(results_raw_3meth, here("Report", "Results_raw_3methods.csv"))
+readr::write_csv(
+  results_raw_3meth,
+  here("Report", "Raw_results", "Results_raw_3methods.csv")
+)
 
