@@ -1006,7 +1006,7 @@ loop_4_exp_sim <- function(
   
 }
 
-## 2.6. Function to calculate the p-value to testing the null hypothesis 
+## 2.6. Function to calculate the p-value for testing the null hypothesis 
 ## that there does not exist an interval with elevated risk
 
 # For each exposure-outcome pair, this function extract the observed LR test stat, 
