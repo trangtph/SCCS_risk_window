@@ -93,9 +93,9 @@ lapply(cdm, base_summary)
 
 <!--- Note: Please look at the output of this chunk to check if the format of all the date columns (except the column `birth_date`), is one of the following: dd/mm/yyyy, dd-mm-yyyy, yyyy-mm-dd, yyyy/mm/dd. If not, please convert them to the above format before continue. --->
 
-```{r}
+```{r echo=FALSE}
 #| label: "skim_date_format"
-#
+
 date_skim <- function(df, date_pattern = "_date(_\\d+)?$") {
   date_cols <- grep(date_pattern, names(df), value = TRUE)
   for (col in date_cols) {
@@ -252,7 +252,7 @@ lapply(cdm_cleaned, base_summary)
 
 <!--- Note: Please look at the output of this chunk to check if the format of all the date columns (except the column `birth_date`) is of type "Date", formatted as yyyy-mm-dd. --->
 
-```{r}
+```{r echo=FALSE}
 #| label: "skim_date_format_clean"
 
 lapply(cdm_cleaned, function(df){
@@ -655,7 +655,7 @@ cdm_eligible$individual <- cdm_eligible$individual %>%
 ```{r}
 cdm_eligible[c("myo", "pe", "thrc")] <- lapply(cdm_eligible[c("myo", "pe", "thrc")], function(df) {
   df %>%
-    dplyr::left_join(cdm_eligible$individual %>% select(id, obs_end_date), by = "id") %>%
+    dplyr::left_join(cdm_eligible$individual %>% select(id, obs_sta_date, obs_end_date), by = "id") %>%
     dplyr::filter(diagnosis_date <= obs_end_date & 
                     diagnosis_date >= obs_sta_date)
 })
@@ -732,7 +732,7 @@ cdm_eligible[c("myo_sccs", "pe_sccs", "thrc_sccs")] <-
     df %>%
       select(-c(hosp_id, coding_system, event_group)) %>%
       left_join(cdm_eligible$individual %>% 
-                  dplyr::select(id, obs_sta_date), by = "id") %>%
+                  dplyr::select(id), by = "id") %>%
       left_join(cdm_eligible$covid_vacc_wide, by = "id")
   })
 ```
@@ -823,6 +823,16 @@ cdm_eligible$comorb_stat <- cdm_eligible$individual %>%
 ```
 
 ### Final data for analysis
+
+```{r}
+# make sure the ids are numeric
+all_ids <- unique(unlist(lapply(cdm_eligible, `[[`, "id")))
+
+cdm_eligible <- lapply(cdm_eligible, function(df) {
+  df$id_num <- as.numeric(factor(df$id, levels = all_ids))
+  df
+})
+```
 
 ```{r}
 # Create the sub-folder inside the root folder to store the datasets
