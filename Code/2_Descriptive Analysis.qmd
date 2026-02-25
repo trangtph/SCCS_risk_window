@@ -70,25 +70,8 @@ str(cdm_sccs, max.level = 1)
 
 Kaplan-Meier curve for observation time:
 
-```{r}
-# Create survival object
-surv_obj <- with(cdm_sccs$myo_sccs,
-                 Surv(time = obs_end, event = rep(1, nrow(cdm_sccs$myo_sccs))))
-
-# Fit Kaplan–Meier
-km_fit <- survfit(surv_obj ~ 1)
-
-plot(
-  km_fit,
-  xlab = "Days since start of observation",
-  ylab = "Individuals remaining under observation (%)",
-  fun  = function(y) y * 100,
-  conf.int = FALSE
-)
-```
-
 ```{r echo=FALSE}
-
+# Create survival object and fit Kaplan-Meier
 km_fits <- lapply(cdm_sccs[c("myo_sccs", "pe_sccs", "thrc_sccs")], function(dat) {
   surv_obj <- with(dat,
                    Surv(time = obs_end, event = rep(1, nrow(dat))))
@@ -107,7 +90,7 @@ cols <- c("black", "blue", "red")
 plot(
   km_fits[[1]],
   xlab = "Days since start of observation",
-  ylab = "Individuals remaining under observation (%)",
+  ylab = "Individuals remaining \n under observation (%)",
   fun  = function(y) y * 100,
   conf.int = FALSE,
   col = cols[1],
@@ -298,6 +281,7 @@ cdm_sccs$thrc_sccs %>% summarise(case_bnt1 = sum(!is.na(bnt_1)),
 ```{r}
 #| label: fig-event_to_cens
 #| fig-cap: "Distribution of time from event to end of follow-up"
+#| fig-width: 7
 
 # Calculate the time from event until end of observation
 cdm_sccs[c("myo_sccs", "pe_sccs", "thrc_sccs")] <- lapply(cdm_sccs[c("myo_sccs", "pe_sccs", "thrc_sccs")], function(df) {
@@ -410,9 +394,9 @@ test_event_dep_obs <- function(dat) {
 
   list(
     models = list(
-      base = m_base$coefficients,
-      dep_obs_bnt = m_dep1$coefficients,
-      dep_obs_chad = m_dep2$coefficients
+      base = m_base$coefficients[1:8,],
+      dep_obs_bnt = m_dep1$coefficients[c(2:5,24:31),],
+      dep_obs_chad = m_dep2$coefficients[c(1:4,24:31),]
     ),
     lrt = list(
       dep_obs_bnt = lrtsccs(m_base, m_dep1),
