@@ -40,14 +40,6 @@ cdm_sccs <- setNames(
 )
 str(cdm_sccs, max.level = 1)
 
-# make sure the id is numeric
-all_ids <- unique(unlist(lapply(cdm_sccs, `[[`, "id")))
-
-cdm_sccs <- lapply(cdm_sccs, function(df) {
-  df$id_num <- as.numeric(factor(df$id, levels = all_ids))
-  df
-})
-
 
 ### Specify parameters ---------------------------------------------------------
 
