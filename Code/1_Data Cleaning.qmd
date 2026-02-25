@@ -656,7 +656,8 @@ cdm_eligible$individual <- cdm_eligible$individual %>%
 cdm_eligible[c("myo", "pe", "thrc")] <- lapply(cdm_eligible[c("myo", "pe", "thrc")], function(df) {
   df %>%
     dplyr::left_join(cdm_eligible$individual %>% select(id, obs_end_date), by = "id") %>%
-    dplyr::filter(diagnosis_date <= obs_end_date)
+    dplyr::filter(diagnosis_date <= obs_end_date & 
+                    diagnosis_date >= obs_sta_date)
 })
 ```
 
@@ -765,6 +766,24 @@ cdm_eligible[c("myo_sccs", "pe_sccs", "thrc_sccs")] <-
     )
   )
     })
+```
+
+#### Additional filtering of events within the observation period, in case there were errors with date filtering
+
+```{r}
+cdm_eligible[c("myo_sccs", "pe_sccs", "thrc_sccs")] <-
+  lapply(cdm_eligible[c("myo_sccs", "pe_sccs", "thrc_sccs")], function(df) {
+  df %>% 
+      dplyr::filter(diagnosis <= obs_end & 
+                    diagnosis >= obs_sta)
+})
+```
+
+```{r}
+# Check number of events again after filtering
+cdm_eligible$myo %>% summarise(n_myo = n())
+cdm_eligible$pe %>% summarise(n_pe = n())
+cdm_eligible$thrc %>% summarise(n_thrc = n())
 ```
 
 ### Determine comorbidities status
