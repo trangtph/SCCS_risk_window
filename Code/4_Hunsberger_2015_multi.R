@@ -335,8 +335,8 @@ results_to_table <- function(result_list) {
       er_ci_up  <- NA
       
       if (!is.null(res$er_ci_95)) {
-        er_ci_low <- unname(res$er_ci_95["lower"])
-        er_ci_up  <- unname(res$er_ci_95["upper"])
+        er_ci_low <- unname(res$er_ci_95["2.5%"])
+        er_ci_up  <- unname(res$er_ci_95["97.5%"])
       }
       #append the data frame as a new element at the end of the list
       rows[[length(rows) + 1]] <- data.frame(
