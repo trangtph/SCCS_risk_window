@@ -47,6 +47,7 @@ library(lubridate)
 library(SCCS)
 library(survival)
 library(flextable)
+library(scales)
 ```
 
 ```{r}
@@ -64,6 +65,74 @@ cdm_sccs <- setNames(
 cat("Check the structure of imported files:")
 str(cdm_sccs, max.level = 1)
 ```
+
+## Distribution of observation time
+
+Kaplan-Meier curve for observation time:
+
+```{r}
+# Create survival object
+surv_obj <- with(cdm_sccs$myo_sccs,
+                 Surv(time = obs_end, event = rep(1, nrow(cdm_sccs$myo_sccs))))
+
+# Fit Kaplan–Meier
+km_fit <- survfit(surv_obj ~ 1)
+
+plot(
+  km_fit,
+  xlab = "Days since start of observation",
+  ylab = "Individuals remaining under observation (%)",
+  fun  = function(y) y * 100,
+  conf.int = FALSE
+)
+```
+
+```{r echo=FALSE}
+
+km_fits <- lapply(cdm_sccs[c("myo_sccs", "pe_sccs", "thrc_sccs")], function(dat) {
+  surv_obj <- with(dat,
+                   Surv(time = obs_end, event = rep(1, nrow(dat))))
+  survfit(surv_obj ~ 1)
+})
+
+names(km_fits) <- c("myo", "pe", "thrc")
+```
+
+```{r}
+#| label: fig-km-obs
+#| fig-cap: "Percentage of individuals remaining under observation over time per outcome"
+
+cols <- c("black", "blue", "red")
+
+plot(
+  km_fits[[1]],
+  xlab = "Days since start of observation",
+  ylab = "Individuals remaining under observation (%)",
+  fun  = function(y) y * 100,
+  conf.int = FALSE,
+  col = cols[1],
+  lwd = 2
+)
+
+for (i in 2:length(km_fits)) {
+  lines(
+    km_fits[[i]],
+    fun = function(y) y * 100,
+    conf.int = FALSE,
+    col = cols[i],
+    lwd = 2
+  )
+}
+
+legend(
+  "bottomleft",
+  legend = names(km_fits),
+  col = cols,
+  lwd = 2,
+  bty = "n"
+)
+```
+
 
 ## Distributions of exposures and outcomes
 
@@ -93,6 +162,7 @@ plot_monthly_counts <- function(df, date_var, label, ylab = "Number of events") 
 }
 ```
 
+<!-- Note: Please check the following figures to ensures that all events are within 01 Oct 2020 and 30 April 2022 -->
 ```{r}
 #| label: fig-event_count
 #| fig-cap: "Monthly event counts by outcome"
@@ -128,11 +198,12 @@ plot_monthly_counts(cdm_sccs$covid_vacc_wide,
                     date_var = chad_2_date,  
                     label = "ChAd dose 2",ylab = "Number of vaccinations")
 ```
+
 ### Dosing interval
 
-- `bnt_interval` and `chad_interval`: interval between vaccine dose 1 and the earliest of (dose 2, end of observation).
+-   `bnt_interval` and `chad_interval`: interval between vaccine dose 1 and the earliest of (dose 2, end of observation).
 
-- `bnt2_to_end` and `chad2_to_end`: interval between dose 2 and end of observation. 
+-   `bnt2_to_end` and `chad2_to_end`: interval between dose 2 and end of observation.
 
 ```{r}
 # Calculate the interval between dose 1 and dose 2, and between dose 2 and end of observation
@@ -183,7 +254,6 @@ for (v in vars) {
 }
 ```
 
-
 ### Distribution of 1st COVID-19 infection
 
 ```{r}
@@ -223,7 +293,7 @@ cdm_sccs$thrc_sccs %>% summarise(case_bnt1 = sum(!is.na(bnt_1)),
 
 ### Event-dependent observation period
 
--   histogram of time from event until end of observation
+-   **Histogram of time from event until end of observation**
 
 ```{r}
 #| label: fig-event_to_cens
@@ -253,6 +323,8 @@ plot_event_to_cens <- function(df, label){
     x = "Days from event",
     y = "Frequency",
     title = label) +
+  scale_x_continuous(limits = c(0, 600), breaks = scales::breaks_width(60)
+                     ) +   
   theme_minimal()
 }
 
@@ -263,9 +335,103 @@ plot_event_to_cens(cdm_sccs$thrc_sccs, label = "Thrombocytopenia")
 
 ```
 
+- **Test the robustness of results to event-dependent observation period:**
+
+```{r}
+# Add censoring indicator
+cdm_sccs[c("myo_sccs", "pe_sccs", "thrc_sccs")] <-
+  lapply(cdm_sccs[c("myo_sccs", "pe_sccs", "thrc_sccs")], function(df) {
+    df %>%
+      mutate(censor = dplyr::if_else(obs_end < 577, 1, 0))
+  })
+
+# Define the funciton to test for event-dependent observation period
+test_event_dep_obs <- function(dat) {
+
+  m_base <- standardsccs(
+    formula = event ~ bnt_1 + chad_1 + age,
+    indiv = id_num,
+    astart = obs_sta,
+    aend = obs_end,
+    aevent = diagnosis,
+    adrug = list(
+      cbind(bnt_1, bnt_2),
+      cbind(chad_1, chad_2)),
+    aedrug = list(
+      cbind(bnt_1 + 28, bnt_2 + 28),
+      cbind(chad_1 + 28, chad_2 + 28)),
+    washout = list(),
+    sameexpopar = c(FALSE, FALSE, FALSE),
+    agegrp = seq(31, 548, by = 30),
+    expogrp = list(c(0, 1), c(0, 1)),
+    dataformat = "multi",
+    data = dat
+  )
+
+  m_dep1 <- standardsccs(
+    formula = event ~ factor(censor)/bnt_1 + chad_1 + age,
+    indiv = id_num,
+    astart = obs_sta,
+    aend = obs_end,
+    aevent = diagnosis,
+    adrug = list(
+      cbind(bnt_1, bnt_2),
+      cbind(chad_1, chad_2)),
+    aedrug = list(
+      cbind(bnt_1 + 28, bnt_2 + 28),
+      cbind(chad_1 + 28, chad_2 + 28)),
+    washout = list(),
+    sameexpopar = c(FALSE, FALSE, FALSE),
+    agegrp = seq(31, 548, by = 30),
+    expogrp = list(c(0, 1), c(0, 1)),
+    dataformat = "multi",
+    data = dat
+  )
+
+  m_dep2 <- standardsccs(
+    formula = event ~ bnt_1 + factor(censor)/chad_1 + age,
+    indiv = id_num,
+    astart = obs_sta,
+    aend = obs_end,
+    aevent = diagnosis,
+    adrug = list(
+      cbind(bnt_1, bnt_2),
+      cbind(chad_1, chad_2)),
+    aedrug = list(
+      cbind(bnt_1 + 28, bnt_2 + 28),
+      cbind(chad_1 + 28, chad_2 + 28)),
+    washout = list(),
+    sameexpopar = c(FALSE, FALSE, FALSE),
+    agegrp = seq(31, 548, by = 30),
+    expogrp = list(c(0, 1), c(0, 1)),
+    dataformat = "multi",
+    data = dat
+  )
+
+  list(
+    models = list(
+      base = m_base$coefficients,
+      dep_obs_bnt = m_dep1$coefficients,
+      dep_obs_chad = m_dep2$coefficients
+    ),
+    lrt = list(
+      dep_obs_bnt = lrtsccs(m_base, m_dep1),
+      dep_obs_chad = lrtsccs(m_base, m_dep2)
+    )
+  )
+}
+```
+
+```{r}
+# Apply the function
+event_dep_obs_results <- lapply(cdm_sccs[c("myo_sccs", "pe_sccs", "thrc_sccs")], test_event_dep_obs)
+
+event_dep_obs_results
+```
+
 ### Event-dependent exposure
 
--   Time interval between the start of each exposure and the event
+- Time interval between the start of each exposure and the event
 
 ```{r}
 # Function to calculate the event-exposure interval
@@ -306,11 +472,13 @@ thrc_to_exp <- exposure_centered_intervals(cdm_sccs$thrc_sccs)
 
 ```
 
+
 ```{r}
 #| label: fig-event_to_exp
 #| fig-cap: "Number of events in exposed cases by time since exposure, for investigating event-dependent exposure"
 #| fig-height: 5
- 
+#| fig-width: 7
+
 # Plot the interval for each exposure and each outcome
 plot_event_to_exp <- function(df, label) {
 ggplot(df, aes(delta)) +
@@ -321,7 +489,8 @@ ggplot(df, aes(delta)) +
     x = "Days since exposure",
     y = "Number of events",
     title = label
-  ) +
+  ) + 
+  scale_x_continuous(limits = c(-500, 450), breaks = scales::breaks_width(90)) +
   theme_minimal()
 }
 
@@ -419,6 +588,20 @@ ggplot(thrc_centred_obs, aes(t, E_t, colour = exposure)) +
 ```
 
 The centred observation plot reflects design constraints: number of exposed cases that are under observation at a given time point (the hypothetical distribution of event relative to exposure if there is no event-dependent exposure).
+
+- Count the number of events in the period before each exposure
+
+```{r}
+lapply(
+  list(thrc = thrc_to_exp, pe = pe_to_exp, myo = myo_to_exp),
+  function(df)
+    with(df,
+         table(
+           exposure,
+           cut(delta, seq(-120, 0, 30), right = FALSE)
+         ))
+)
+```
 
 ## Baseline characteristics of cases (per outcome)
 
