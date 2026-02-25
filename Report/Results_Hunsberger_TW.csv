@@ -1,0 +1,13 @@
+,outcome,exposure,error,total_event,optimal_window_days,p_value,events_in_window,excess_risk,er_ci_low,er_ci_up
+1,myo,bnt_1,NA,33,2,0.0012,7,7.424242424,NA,NA
+2,myo,bnt_2,NA,39,50,0.4662,32,1.148717949,NA,NA
+3,myo,chad_1,NA,101,11,2.00E-04,49,3.087308731,NA,NA
+4,myo,chad_2,NA,218,4,2.00E-04,123,9.873853211,NA,NA
+5,pe,bnt_1,NA,126,19,0.1198,47,1.374269006,NA,NA
+6,pe,bnt_2,NA,145,60,0.4738,131,1.054022989,NA,NA
+7,pe,chad_1,NA,26,39,0.3088,,1.587771203,NA,NA
+8,pe,chad_2,NA,40,10,0.3662,10,1.75,NA,NA
+9,thrc,bnt_1,NA,43,61,0.0992,,1.120853984,NA,NA
+10,thrc,bnt_2,NA,39,7,0.8886,5,1.282051282,NA,NA
+11,thrc,chad_1,NA,17,34,0.0236,,1.937716263,NA,NA
+12,thrc,chad_2,NA,14,31,0.047,,1.774193548,NA,NA
